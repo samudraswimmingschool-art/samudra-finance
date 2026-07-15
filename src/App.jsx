@@ -4,11 +4,11 @@ import {
   TrendingUp, ArrowLeftRight, Building2, Plus, Trash2, Check, AlertCircle,
   Search, LogOut, RefreshCw, Wallet, ArrowDownCircle, ArrowUpCircle,
   PiggyBank, ShoppingCart, ChevronLeft, Pencil, BarChart3, X,
-  TrendingDown, Lightbulb
+  TrendingDown, Lightbulb, Printer, ChevronDown, ChevronUp, Banknote
 } from "lucide-react";
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Cell,
+  ResponsiveContainer, Cell, PieChart, Pie, Legend,
 } from "recharts";
 import { supabase } from "./lib/supabase";
 import Login from "./components/Login";
@@ -89,6 +89,7 @@ export default function App() {
       } else if (tab === "dashboard") {
         setPnl(await rpcPnl(orgId, start, end));
         setBalances(await rpcAccountBalances(orgId, start, end));
+        setTrend(await rpcMonthlyTrend(orgId, YEAR));
       }
     } catch (e) { alert("Gagal memuat: " + e.message); }
     finally { setLoading(false); }
@@ -148,22 +149,28 @@ export default function App() {
         <main style={{ flex:1, padding:"26px 34px", maxWidth:1180 }}>
           {/* period selector */}
           {SHOW_PERIOD.includes(tab) && (
-            <div style={{ display:"flex", gap:5, flexWrap:"wrap", marginBottom:18, alignItems:"center" }}>
+            <div className="no-print" style={{ display:"flex", gap:5, flexWrap:"wrap", marginBottom:18, alignItems:"center" }}>
               <button className="btn" onClick={()=>setPeriod("all")}
                 style={periodBtn(period==="all")}>Semua</button>
               {MONTHS.map((m,i)=>(
                 <button key={m} className="btn" onClick={()=>setPeriod(i)}
                   style={periodBtn(period===i, true)}>{m.slice(0,3)}</button>
               ))}
-              <button className="btn" onClick={load} title="Muat ulang"
+              <button className="btn" onClick={()=>window.print()} title="Simpan / cetak PDF"
                 style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6,
+                  background:C.deep, color:"#fff", padding:"7px 14px", borderRadius:8, fontSize:12.5, fontWeight:600 }}>
+                <Printer size={14} /> Simpan PDF
+              </button>
+              <button className="btn" onClick={load} title="Muat ulang"
+                style={{ display:"flex", alignItems:"center", gap:6,
                   background:C.surf, color:C.sub, padding:"7px 12px", borderRadius:8, fontSize:12.5 }}>
                 <RefreshCw size={14} className={loading?"spin":""} /> {loading?"Memuat":"Refresh"}
               </button>
             </div>
           )}
 
-          {tab==="dashboard" && <Dashboard pnl={pnl} balances={balances} />}
+          <div id="print-area">
+          {tab==="dashboard" && <Dashboard pnl={pnl} balances={balances} trend={trend} />}
           {tab==="transaksi" && <Transaksi accounts={accounts} acctByCode={acctByCode}
                                           journal={journal} acctById={acctById} orgId={orgId} onChange={load} />}
           {tab==="journal"   && <Journal accounts={accounts} acctById={acctById} acctByCode={acctByCode}
@@ -176,6 +183,7 @@ export default function App() {
           {tab==="equity"    && <Equity orgId={orgId} period={period} />}
           {tab==="cashflow"  && <CashFlow flow={flow} detail={flowDetail} />}
           {tab==="coa"       && <COAView accounts={accounts} />}
+          </div>
         </main>
       </div>
     </div>
@@ -228,7 +236,7 @@ const sumBy = (rows, pred) => rows.filter(pred).reduce((s,r)=>s+Number(r.amount|
 // ============================================================
 // DASHBOARD
 // ============================================================
-function Dashboard({ pnl, balances }) {
+function Dashboard({ pnl, balances, trend }) {
   const rev = sumBy(pnl, r=>r.type==="Pendapatan");
   const revP = sumBy(pnl, r=>r.type==="Pendapatan"&&r.branch==="Progresif");
   const revS = sumBy(pnl, r=>r.type==="Pendapatan"&&r.branch==="Saraga");
@@ -244,41 +252,162 @@ function Dashboard({ pnl, balances }) {
   const bankBal = balances.filter(b=>b.code==="1-10002").reduce((s,b)=>s+Number(b.balance),0);
   const kasBal = balances.filter(b=>b.code==="1-10007").reduce((s,b)=>s+Number(b.balance),0);
 
+  // data tren + indikator pertumbuhan vs bulan sebelumnya
+  const trendData = (trend||[]).map(t=>({
+    m: MONTHS[Number(t.bulan)-1]?.slice(0,3) || t.bulan,
+    rev: Number(t.pendapatan), exp: Number(t.beban), profit: Number(t.laba),
+  }));
+  const aktif = trendData.filter(t=>t.rev>0 || t.exp>0);
+  const growth = (key) => {
+    if (aktif.length<2) return null;
+    const a=aktif[aktif.length-2][key], b=aktif[aktif.length-1][key];
+    if (!a) return null;
+    return (b-a)/Math.abs(a);
+  };
+  const gRev=growth("rev"), gProfit=growth("profit");
+
+  // komposisi beban
+  const komposisi = [
+    { name:"Gaji & Operasional (Bank)", value:opBank, color:C.teal },
+    { name:"Beban Kas (iklan, ATK, dll)", value:kasBeban, color:C.kas },
+    { name:"COGS (pembelian)", value:cogs, color:C.brass },
+    { name:"Beban lain", value:oe, color:C.neg },
+  ].filter(k=>k.value>0);
+
+  const Delta = ({ g }) => {
+    if (g===null || g===undefined) return null;
+    const up = g>=0;
+    return (
+      <span style={{ display:"inline-flex", alignItems:"center", gap:3, fontSize:11.5, fontWeight:600,
+        color: up?C.pos:C.neg }}>
+        {up?<TrendingUp size={13}/>:<TrendingDown size={13}/>}{up?"+":""}{pct(g)}
+      </span>
+    );
+  };
+
   const kpis = [
-    { label:"Pendapatan", val:rev, tone:C.teal, delta:"Progresif + Saraga" },
-    { label:"Total Beban", val:opBank+kasBeban+cogs, tone:C.neg, delta:"Bank + Kas" },
-    { label:"Laba Bersih", val:profit, tone:C.pos, delta:"Margin "+pct(npm) },
-    { label:"Saldo Bank BCA", val:bankBal, tone:C.teal, delta:"Kas: "+moneyShort(kasBal) },
+    { label:"Pendapatan", val:rev, tone:C.teal, sub:"Progresif + Saraga", g:gRev },
+    { label:"Total Beban", val:opBank+kasBeban+cogs, tone:C.neg, sub:"Bank + Kas", g:null },
+    { label:"Laba Bersih", val:profit, tone:C.pos, sub:"Margin "+pct(npm), g:gProfit },
+    { label:"Saldo Bank BCA", val:bankBal, tone:C.teal, sub:"Kas: "+moneyShort(kasBal), g:null },
   ];
 
   return (
     <div className="pop">
       <PageHead eyebrow="Beranda Keuangan" title="Ringkasan Performa" sub="Data langsung dari database" />
+
+      {/* KPI dengan indikator pertumbuhan */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom:16 }}>
         {kpis.map(k=>(
           <div key={k.label} className="card" style={{ padding:"16px 17px" }}>
-            <span style={{ fontSize:12.5, color:C.sub, fontWeight:500 }}>{k.label}</span>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+              <span style={{ fontSize:12.5, color:C.sub, fontWeight:500 }}>{k.label}</span>
+              <Delta g={k.g} />
+            </div>
             <div className="mono" style={{ fontSize:19, fontWeight:700, marginTop:10 }}>{money(k.val)}</div>
-            <div style={{ fontSize:11.5, color:C.sub, marginTop:3 }}>{k.delta}</div>
+            <div style={{ fontSize:11.5, color:C.sub, marginTop:3 }}>{k.sub}</div>
           </div>
         ))}
       </div>
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
-        {[{n:"Cabang Progresif",r:revP,o:opP,c:C.teal},{n:"Cabang Saraga",r:revS,o:opS,c:C.brass}].map(b=>(
-          <div key={b.n} className="card" style={{ padding:"16px 18px" }}>
-            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12 }}>
-              <div style={{ width:8, height:8, borderRadius:99, background:b.c }} />
-              <span style={{ fontWeight:600, fontSize:14 }}>{b.n}</span></div>
-            <Line l="Pendapatan" v={b.r} c={C.pos} />
-            <Line l="Operasional (bank)" v={b.o} c={C.neg} />
-            <div style={{ borderTop:`1px solid ${C.line}`, marginTop:6, paddingTop:8 }}>
-              <Line l="Kontribusi" v={b.r-b.o} bold /></div>
-          </div>
-        ))}
+
+      {/* Tren + Komposisi beban */}
+      <div style={{ display:"grid", gridTemplateColumns:"1.6fr 1fr", gap:14, marginBottom:16 }}>
+        <div className="card" style={{ padding:"18px 18px 8px" }}>
+          <div style={{ fontWeight:600, fontSize:14.5 }}>Tren Pendapatan & Laba</div>
+          <div style={{ fontSize:12, color:C.sub, marginBottom:8 }}>Sepanjang {YEAR}</div>
+          <ResponsiveContainer width="100%" height={215}>
+            <AreaChart data={trendData} margin={{ left:-18, right:6, top:10 }}>
+              <defs>
+                <linearGradient id="dr" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.teal} stopOpacity={.35}/><stop offset="100%" stopColor={C.teal} stopOpacity={0}/></linearGradient>
+                <linearGradient id="dp" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.pos} stopOpacity={.25}/><stop offset="100%" stopColor={C.pos} stopOpacity={0}/></linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
+              <XAxis dataKey="m" tick={{ fontSize:12, fill:C.sub }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize:11, fill:C.sub }} tickFormatter={moneyShort} axisLine={false} tickLine={false} width={54} />
+              <Tooltip formatter={(v)=>money(v)} contentStyle={{ borderRadius:10, border:`1px solid ${C.line}`, fontSize:12 }} />
+              <Area type="monotone" dataKey="rev" stroke={C.teal} strokeWidth={2.4} fill="url(#dr)" name="Pendapatan" />
+              <Area type="monotone" dataKey="profit" stroke={C.pos} strokeWidth={2.4} fill="url(#dp)" name="Laba" />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="card" style={{ padding:"18px 18px 10px" }}>
+          <div style={{ fontWeight:600, fontSize:14.5 }}>Komposisi Beban</div>
+          <div style={{ fontSize:12, color:C.sub, marginBottom:4 }}>Ke mana uang keluar</div>
+          {komposisi.length ? (
+            <ResponsiveContainer width="100%" height={200}>
+              <PieChart>
+                <Pie data={komposisi} dataKey="value" nameKey="name" cx="50%" cy="50%"
+                  innerRadius={45} outerRadius={70} paddingAngle={2}>
+                  {komposisi.map((k,i)=><Cell key={i} fill={k.color} />)}
+                </Pie>
+                <Tooltip formatter={(v)=>money(v)} contentStyle={{ borderRadius:10, border:`1px solid ${C.line}`, fontSize:12 }} />
+                <Legend wrapperStyle={{ fontSize:10.5 }} iconType="circle" />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : <div style={{ padding:"40px 0", textAlign:"center", color:C.sub, fontSize:12.5 }}>Belum ada beban periode ini</div>}
+        </div>
+      </div>
+
+      {/* Perbandingan cabang + laba per bulan */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:16 }}>
+        <div className="card" style={{ padding:"18px 18px 8px" }}>
+          <div style={{ fontWeight:600, fontSize:14.5, marginBottom:2 }}>Laba per Bulan</div>
+          <div style={{ fontSize:12, color:C.sub, marginBottom:6 }}>Net profit {YEAR}</div>
+          <ResponsiveContainer width="100%" height={190}>
+            <BarChart data={trendData} margin={{ left:-18, right:6, top:10 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
+              <XAxis dataKey="m" tick={{ fontSize:12, fill:C.sub }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize:11, fill:C.sub }} tickFormatter={moneyShort} axisLine={false} tickLine={false} width={54} />
+              <Tooltip formatter={(v)=>money(v)} contentStyle={{ borderRadius:10, border:`1px solid ${C.line}`, fontSize:12 }} />
+              <Bar dataKey="profit" radius={[5,5,0,0]}>{trendData.map((d,i)=><Cell key={i} fill={d.profit>=0?C.pos:C.neg} />)}</Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="card" style={{ padding:"16px 18px" }}>
+          <div style={{ fontWeight:600, fontSize:14.5, marginBottom:12 }}>Perbandingan Cabang</div>
+          {[{n:"Progresif",r:revP,o:opP,c:C.teal},{n:"Saraga",r:revS,o:opS,c:C.brass}].map(b=>(
+            <div key={b.n} style={{ marginBottom:12 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
+                <div style={{ width:8, height:8, borderRadius:99, background:b.c }} />
+                <span style={{ fontWeight:600, fontSize:13 }}>Cabang {b.n}</span>
+                <span className="mono" style={{ marginLeft:"auto", fontWeight:700, fontSize:13, color:C.pos }}>{money(b.r-b.o)}</span>
+              </div>
+              <div style={{ height:8, borderRadius:99, background:C.surf, overflow:"hidden" }}>
+                <div style={{ height:"100%", borderRadius:99, background:b.c,
+                  width: `${Math.min(100, (revP+revS)? (b.r/(revP+revS))*100 : 0)}%` }} />
+              </div>
+              <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:C.sub, marginTop:4 }}>
+                <span>Pendapatan {moneyShort(b.r)}</span>
+                <span>Operasional {moneyShort(b.o)}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Saldo & rasio cepat */}
+      <div className="card" style={{ padding:"18px 20px" }}>
+        <div style={{ fontWeight:600, fontSize:14.5, marginBottom:14 }}>Saldo & Rasio Cepat</div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:16 }}>
+          <QuickStat icon={Banknote} label="Saldo Bank BCA" val={money(bankBal)} tone={C.teal} />
+          <QuickStat icon={Wallet} label="Saldo Kas" val={money(kasBal)} tone={C.kas} />
+          <QuickStat icon={TrendingUp} label="Margin Laba" val={pct(npm)} tone={npm>=0.15?C.pos:C.neg} />
+          <QuickStat icon={BarChart3} label="Rasio Beban" val={rev?pct((opBank+kasBeban+cogs+oe)/rev):"–"} tone={C.brass} />
+        </div>
       </div>
     </div>
   );
 }
+const QuickStat = ({ icon:Icon, label, val, tone }) => (
+  <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+    <div style={{ width:38, height:38, borderRadius:10, background:tone+"18", display:"grid", placeItems:"center", flexShrink:0 }}>
+      <Icon size={19} color={tone} /></div>
+    <div>
+      <div style={{ fontSize:11.5, color:C.sub }}>{label}</div>
+      <div className="mono" style={{ fontSize:16, fontWeight:700 }}>{val}</div>
+    </div>
+  </div>
+);
 const Line = ({ l, v, c, bold }) => (
   <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, padding:"5px 0" }}>
     <span style={{ color:bold?C.ink:C.sub, fontWeight:bold?600:400 }}>{l}</span>
@@ -1167,48 +1296,60 @@ function CashFlow({ flow, detail }) {
   const kasDetail = detail.filter(d=>d.code==="1-10007");
 
   const Block=({title,sumRows,rows,tone})=>{
+    const [open, setOpen] = useState(false);   // default minimize
     const totIn = sumRows.reduce((s,f)=>s+Number(f.masuk),0);
     const totOut = sumRows.reduce((s,f)=>s+Number(f.keluar),0);
     return (
       <div className="card" style={{ overflow:"hidden", marginBottom:16 }}>
-        <div style={{ padding:"11px 20px", background:tone+"15", fontWeight:700, color:C.deep, fontSize:13,
-          display:"flex", justifyContent:"space-between" }}>
-          <span>{title}</span>
-          <span className="mono" style={{ fontWeight:700 }}>Net {money(totIn-totOut)}</span>
-        </div>
-        <div style={{ display:"grid", gridTemplateColumns:"90px 1fr 130px 130px", padding:"9px 20px",
-          fontSize:11.5, color:C.sub, fontWeight:600, borderBottom:`1px solid ${C.line}` }}>
-          <span>TANGGAL</span><span>KETERANGAN</span>
-          <span style={{ textAlign:"right" }}>MASUK</span><span style={{ textAlign:"right" }}>KELUAR</span></div>
-        {rows.length ? rows.map((d,i)=>(
-          <div key={d.entry_id+i} style={{ display:"grid", gridTemplateColumns:"90px 1fr 130px 130px",
-            padding:"9px 20px", borderBottom:`1px solid ${C.line}`, fontSize:12.5, alignItems:"center" }}>
-            <span style={{ color:C.sub }}>{d.entry_date}</span>
-            <span>{d.memo}
-              {d.cash_source && <span style={{ fontSize:9.5, fontWeight:700, padding:"1px 6px", marginLeft:6,
-                borderRadius:20, background:d.cash_source==="kas"?C.kas+"18":C.teal+"15",
-                color:d.cash_source==="kas"?C.kas:C.teal }}>{d.cash_source==="kas"?"KAS":"BANK"}</span>}</span>
-            <span className="mono" style={{ textAlign:"right", color:Number(d.masuk)?C.pos:C.line }}>
-              {Number(d.masuk)?money(d.masuk):"–"}</span>
-            <span className="mono" style={{ textAlign:"right", color:Number(d.keluar)?C.neg:C.line }}>
-              {Number(d.keluar)?money(d.keluar):"–"}</span>
-          </div>
-        )) : <div style={{ padding:"14px 20px", fontSize:12.5, color:C.sub, fontStyle:"italic" }}>Tidak ada mutasi periode ini.</div>}
-        {rows.length>0 && (
-          <div style={{ display:"grid", gridTemplateColumns:"90px 1fr 130px 130px", padding:"11px 20px",
-            background:C.surf, fontWeight:700, fontSize:12.5 }}>
-            <span></span><span>TOTAL</span>
-            <span className="mono" style={{ textAlign:"right", color:C.pos }}>{money(totIn)}</span>
-            <span className="mono" style={{ textAlign:"right", color:C.neg }}>{money(totOut)}</span>
-          </div>
-        )}
+        <button className="btn" onClick={()=>setOpen(!open)}
+          style={{ width:"100%", padding:"13px 20px", background:tone+"15", fontWeight:700, color:C.deep, fontSize:13,
+            display:"flex", justifyContent:"space-between", alignItems:"center", textAlign:"left" }}>
+          <span style={{ display:"flex", alignItems:"center", gap:8 }}>
+            {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+            {title}
+            <span style={{ fontSize:11, fontWeight:500, color:C.sub }}>· {rows.length} transaksi</span>
+          </span>
+          <span style={{ display:"flex", gap:18, alignItems:"center" }}>
+            <span className="mono" style={{ fontSize:12, color:C.pos }}>↑ {money(totIn)}</span>
+            <span className="mono" style={{ fontSize:12, color:C.neg }}>↓ {money(totOut)}</span>
+            <span className="mono" style={{ fontWeight:700 }}>Net {money(totIn-totOut)}</span>
+          </span>
+        </button>
+        {open && <>
+          <div style={{ display:"grid", gridTemplateColumns:"90px 1fr 130px 130px", padding:"9px 20px",
+            fontSize:11.5, color:C.sub, fontWeight:600, borderBottom:`1px solid ${C.line}` }}>
+            <span>TANGGAL</span><span>KETERANGAN</span>
+            <span style={{ textAlign:"right" }}>MASUK</span><span style={{ textAlign:"right" }}>KELUAR</span></div>
+          {rows.length ? rows.map((d,i)=>(
+            <div key={d.entry_id+i} style={{ display:"grid", gridTemplateColumns:"90px 1fr 130px 130px",
+              padding:"9px 20px", borderBottom:`1px solid ${C.line}`, fontSize:12.5, alignItems:"center" }}>
+              <span style={{ color:C.sub }}>{d.entry_date}</span>
+              <span>{d.memo}
+                {d.cash_source && <span style={{ fontSize:9.5, fontWeight:700, padding:"1px 6px", marginLeft:6,
+                  borderRadius:20, background:d.cash_source==="kas"?C.kas+"18":C.teal+"15",
+                  color:d.cash_source==="kas"?C.kas:C.teal }}>{d.cash_source==="kas"?"KAS":"BANK"}</span>}</span>
+              <span className="mono" style={{ textAlign:"right", color:Number(d.masuk)?C.pos:C.line }}>
+                {Number(d.masuk)?money(d.masuk):"–"}</span>
+              <span className="mono" style={{ textAlign:"right", color:Number(d.keluar)?C.neg:C.line }}>
+                {Number(d.keluar)?money(d.keluar):"–"}</span>
+            </div>
+          )) : <div style={{ padding:"14px 20px", fontSize:12.5, color:C.sub, fontStyle:"italic" }}>Tidak ada mutasi periode ini.</div>}
+          {rows.length>0 && (
+            <div style={{ display:"grid", gridTemplateColumns:"90px 1fr 130px 130px", padding:"11px 20px",
+              background:C.surf, fontWeight:700, fontSize:12.5 }}>
+              <span></span><span>TOTAL</span>
+              <span className="mono" style={{ textAlign:"right", color:C.pos }}>{money(totIn)}</span>
+              <span className="mono" style={{ textAlign:"right", color:C.neg }}>{money(totOut)}</span>
+            </div>
+          )}
+        </>}
       </div>
     );
   };
   return (
     <div className="pop">
       <PageHead eyebrow="Turunan Otomatis" title="Laporan Arus Kas"
-        sub="Rincian tiap mutasi Bank & Kas — tanggal, keterangan, jumlah masuk/keluar" />
+        sub="Klik judul untuk buka/tutup rincian tiap mutasi Bank & Kas" />
       <Block title="BANK" sumRows={bankSum} rows={bankDetail} tone={C.teal} />
       <Block title="KAS (PETTY CASH)" sumRows={kasSum} rows={kasDetail} tone={C.kas} />
     </div>
@@ -1265,4 +1406,12 @@ const styleSheet = `
   .spin{animation:spin 1s linear infinite}
   ::-webkit-scrollbar{width:8px;height:8px}
   ::-webkit-scrollbar-thumb{background:${C.line};border-radius:8px}
+  @media print {
+    aside, .no-print { display: none !important; }
+    main { padding: 0 !important; max-width: 100% !important; }
+    body { background: #fff !important; }
+    #print-area { animation: none !important; }
+    .card { break-inside: avoid; box-shadow: none !important; }
+    @page { margin: 14mm; }
+  }
 `;
