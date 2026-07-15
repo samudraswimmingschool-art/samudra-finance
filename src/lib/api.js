@@ -89,6 +89,21 @@ export async function setAccountActive(accountId, active) {
   if (error) throw error;
 }
 
+// Edit akun. Jika sudah dipakai, hanya nama & pay_source yang boleh diubah.
+export async function updateAccount(accountId, patch) {
+  const used = await accountUsedCount(accountId);
+  const safe = used > 0
+    ? { name: patch.name, pay_source: patch.pay_source ?? null }
+    : {
+        code: patch.code, name: patch.name, type: patch.type,
+        branch: patch.branch || null, normal_side: patch.normal_side,
+        statement: patch.statement, pay_source: patch.pay_source || null,
+      };
+  const { error } = await supabase.from("accounts").update(safe).eq("id", accountId);
+  if (error) throw error;
+  return used > 0;
+}
+
 // ---- Jurnal: ambil daftar (header + baris) ----
 export async function getJournal(orgId, start, end) {
   const { data, error } = await supabase

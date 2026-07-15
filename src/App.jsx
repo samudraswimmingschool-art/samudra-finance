@@ -16,7 +16,7 @@ import { C, money, moneyShort, pct, MONTHS, lbl, inp } from "./lib/ui";
 import {
   getMyProfile, getAccounts, getJournal, postJournal, deleteJournal,
   updateJournal, getJournalRange, rpcMonthlyTrend, rpcCashFlowDetail,
-  addAccount, deleteAccount, setAccountActive,
+  addAccount, deleteAccount, setAccountActive, updateAccount, accountUsedCount,
   rpcPnl, rpcBalanceSheet, rpcRetainedProfit, rpcCashFlow, rpcAccountBalances,
   periodRange, signOut,
 } from "./lib/api";
@@ -1037,11 +1037,14 @@ const Empty=()=><div style={{ padding:"9px 20px", fontSize:12, color:C.sub, font
 // ============================================================
 function Balance({ sheet, retained, period }) {
   const aset = sheet.filter(a=>["Kas & Bank","Akun Piutang","Aktiva Tetap"].includes(a.type));
+  const hutang = sheet.filter(a=>a.type==="Kewajiban");
   const modal = sheet.filter(a=>a.type==="Ekuitas");
   const totalAset = aset.reduce((s,a)=>s+Number(a.balance),0);
+  const totalHutang = hutang.reduce((s,a)=>s+Number(a.balance),0);
   const totalModalInput = modal.reduce((s,a)=>s+Number(a.balance),0);
   const totalModal = totalModalInput + Number(retained);
-  const bal = Math.round(totalAset)===Math.round(totalModal);
+  const totalPasiva = totalHutang + totalModal;
+  const bal = Math.round(totalAset)===Math.round(totalPasiva);
   const label = period==="all"?"Posisi akhir "+YEAR:`Posisi s/d ${MONTHS[period]} ${YEAR}`;
 
   const Row=({a})=>(<div style={{ display:"grid", gridTemplateColumns:"1fr 170px", padding:"9px 20px",
@@ -1053,15 +1056,23 @@ function Balance({ sheet, retained, period }) {
     <div className="pop">
       <PageHead eyebrow="Turunan Otomatis" title="Neraca" sub={label} />
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
-        <div className="card" style={{ overflow:"hidden" }}>
+        <div className="card" style={{ overflow:"hidden", alignSelf:"flex-start" }}>
           <div style={{ padding:"11px 20px", background:C.teal+"15", fontWeight:700, color:C.deep, fontSize:13 }}>AKTIVA</div>
           {aset.map(a=><Row key={a.code} a={a} />)}
           <div style={{ display:"grid", gridTemplateColumns:"1fr 170px", padding:"12px 20px",
             background:C.deep, color:"#fff", fontWeight:700, fontSize:13.5 }}>
             <span>TOTAL AKTIVA</span><span className="mono" style={{ textAlign:"right" }}>{money(totalAset)}</span></div>
         </div>
-        <div className="card" style={{ overflow:"hidden" }}>
-          <div style={{ padding:"11px 20px", background:C.brass+"18", fontWeight:700, color:C.deep, fontSize:13 }}>PASIVA (MODAL)</div>
+        <div className="card" style={{ overflow:"hidden", alignSelf:"flex-start" }}>
+          {/* Kewajiban */}
+          <div style={{ padding:"11px 20px", background:C.neg+"12", fontWeight:700, color:C.deep, fontSize:13 }}>KEWAJIBAN (HUTANG)</div>
+          {hutang.length ? hutang.map(a=><Row key={a.code} a={a} />)
+            : <div style={{ padding:"9px 20px", fontSize:12, color:C.sub, fontStyle:"italic", borderBottom:`1px solid ${C.line}` }}>Tidak ada hutang</div>}
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 170px", padding:"9px 20px",
+            background:C.surf, fontWeight:600, fontSize:12.5, borderBottom:`1px solid ${C.line}` }}>
+            <span>Total Kewajiban</span><span className="mono" style={{ textAlign:"right", color:C.neg }}>{money(totalHutang)}</span></div>
+          {/* Modal */}
+          <div style={{ padding:"11px 20px", background:C.brass+"18", fontWeight:700, color:C.deep, fontSize:13 }}>MODAL (EKUITAS)</div>
           {modal.map(a=><Row key={a.code} a={a} />)}
           <div style={{ display:"grid", gridTemplateColumns:"1fr 170px", padding:"9px 20px",
             borderBottom:`1px solid ${C.line}`, fontSize:12.5, background:C.surf }}>
@@ -1069,13 +1080,13 @@ function Balance({ sheet, retained, period }) {
             <span className="mono" style={{ textAlign:"right", color:C.pos }}>{money(Number(retained))}</span></div>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 170px", padding:"12px 20px",
             background:C.deep, color:"#fff", fontWeight:700, fontSize:13.5 }}>
-            <span>TOTAL PASIVA</span><span className="mono" style={{ textAlign:"right" }}>{money(totalModal)}</span></div>
+            <span>TOTAL PASIVA</span><span className="mono" style={{ textAlign:"right" }}>{money(totalPasiva)}</span></div>
         </div>
       </div>
       <div className="card" style={{ marginTop:14, padding:"14px 20px", textAlign:"center",
         background:bal?C.pos+"10":C.neg+"10", border:`1px solid ${bal?C.pos+"40":C.neg+"40"}`,
         color:bal?C.pos:C.neg, fontWeight:700, fontSize:14 }}>
-        {bal?"✓ SEIMBANG — Total Aktiva = Total Pasiva":`✗ SELISIH ${money(Math.abs(totalAset-totalModal))} — cek jurnal`}
+        {bal?"✓ SEIMBANG — Total Aktiva = Kewajiban + Modal":`✗ SELISIH ${money(Math.abs(totalAset-totalPasiva))} — cek jurnal`}
       </div>
     </div>
   );
@@ -1366,6 +1377,8 @@ function CashFlow({ flow, detail }) {
 function COAView({ accounts, orgId, onChange }) {
   const [q, setQ] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [editId, setEditId] = useState(null);      // id akun yang diedit
+  const [editUsed, setEditUsed] = useState(false); // apakah akun terpakai (kunci field)
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState("");
   const blank = () => ({ code:"", name:"", type:"Beban Kas", branch:"",
@@ -1373,18 +1386,32 @@ function COAView({ accounts, orgId, onChange }) {
   const [form, setForm] = useState(blank());
 
   const label={bank:"Bank",kas:"Kas"};
-  const TIPE = ["Kas & Bank","Akun Piutang","Aktiva Tetap","Ekuitas",
+  const TIPE = ["Kas & Bank","Akun Piutang","Aktiva Tetap","Kewajiban","Ekuitas",
     "Pendapatan","COGS","Beban Op","Beban Kas","Other Income","Other Expense"];
 
   const rows = accounts.filter(a=>a.name.toLowerCase().includes(q.toLowerCase())||a.code.includes(q));
+
+  const startEdit = async (a) => {
+    setEditId(a.id); setShowForm(true); setFlash("");
+    setForm({ code:a.code, name:a.name, type:a.type, branch:a.branch||"",
+      normal_side:a.normal_side, statement:a.statement, pay_source:a.pay_source||"" });
+    try { setEditUsed((await accountUsedCount(a.id)) > 0); } catch { setEditUsed(false); }
+    window.scrollTo({ top:0, behavior:"smooth" });
+  };
+  const cancelForm = () => { setShowForm(false); setEditId(null); setEditUsed(false); setForm(blank()); setFlash(""); };
 
   const simpan = async () => {
     if (!form.code || !form.name) { setFlash("✗ Kode dan nama wajib diisi"); return; }
     setBusy(true); setFlash("");
     try {
-      await addAccount(orgId, form);
-      setFlash("✓ Akun berhasil ditambahkan");
-      setForm(blank()); setShowForm(false);
+      if (editId) {
+        const wasUsed = await updateAccount(editId, form);
+        setFlash(wasUsed ? "✓ Akun diperbarui (hanya nama & sumber, karena sudah dipakai)" : "✓ Akun berhasil diperbarui");
+      } else {
+        await addAccount(orgId, form);
+        setFlash("✓ Akun berhasil ditambahkan");
+      }
+      cancelForm();
       onChange();
     } catch (e) {
       setFlash("✗ " + (e.message.includes("duplicate") ? "Kode akun sudah ada" : e.message));
@@ -1408,36 +1435,48 @@ function COAView({ accounts, orgId, onChange }) {
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
         <PageHead eyebrow="Master Data" title="Chart of Account"
           sub={`${accounts.length} akun · kelola akun keuangan Anda`} />
-        <button className="btn no-print" onClick={()=>{ setShowForm(!showForm); setFlash(""); }}
+        <button className="btn no-print" onClick={()=> showForm ? cancelForm() : setShowForm(true) }
           style={{ display:"flex", alignItems:"center", gap:6, background:showForm?C.surf:C.teal,
             color:showForm?C.sub:"#fff", padding:"9px 16px", borderRadius:9, fontSize:13, fontWeight:600, marginTop:4 }}>
           {showForm ? <><X size={15}/> Tutup</> : <><Plus size={15}/> Tambah Akun</>}
         </button>
       </div>
 
-      {/* Form tambah akun */}
+      {/* Form tambah / edit akun */}
       {showForm && (
-        <div className="card pop" style={{ padding:20, marginBottom:16, border:`2px solid ${C.teal}` }}>
+        <div className="card pop" style={{ padding:20, marginBottom:16,
+          border:`2px solid ${editId?C.brass:C.teal}` }}>
+          {editId && (
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14,
+              padding:"8px 12px", borderRadius:8, background:C.brass+"15", color:C.brass, fontWeight:600, fontSize:13 }}>
+              <span><Pencil size={14} style={{ verticalAlign:"-2px", marginRight:6 }} />
+                Edit akun {form.code}{editUsed && " — sudah dipakai, hanya nama & sumber bisa diubah"}</span>
+              <button className="btn" onClick={cancelForm}
+                style={{ background:"transparent", color:C.brass, display:"flex", alignItems:"center", gap:4, fontSize:12.5 }}>
+                <X size={14} /> Batal</button>
+            </div>
+          )}
           <div style={{ display:"grid", gridTemplateColumns:"140px 1fr", gap:12, marginBottom:12 }}>
             <div><label style={lbl}>Kode Akun</label>
-              <input placeholder="mis. 6-60020" value={form.code}
-                onChange={e=>setForm({...form,code:e.target.value})} style={inp} /></div>
+              <input placeholder="mis. 6-60020" value={form.code} disabled={editUsed}
+                onChange={e=>setForm({...form,code:e.target.value})}
+                style={{ ...inp, background:editUsed?C.surf:"#fff", cursor:editUsed?"not-allowed":"text" }} /></div>
             <div><label style={lbl}>Nama Akun</label>
               <input placeholder="mis. Biaya Perawatan Kolam" value={form.name}
                 onChange={e=>setForm({...form,name:e.target.value})} style={inp} /></div>
           </div>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:12 }}>
             <div><label style={lbl}>Tipe</label>
-              <select value={form.type} onChange={e=>{
+              <select value={form.type} disabled={editUsed} onChange={e=>{
                 const t=e.target.value;
-                // set default sisi & statement sesuai tipe
-                const kr=["Pendapatan","Ekuitas","Other Income"].includes(t);
-                const nrc=["Kas & Bank","Akun Piutang","Aktiva Tetap","Ekuitas"].includes(t);
+                const kr=["Pendapatan","Ekuitas","Other Income","Kewajiban"].includes(t);
+                const nrc=["Kas & Bank","Akun Piutang","Aktiva Tetap","Kewajiban","Ekuitas"].includes(t);
                 setForm({...form, type:t, normal_side:kr?"Kr":"Db", statement:nrc?"NRC":"LR"});
-              }} style={inp}>
+              }} style={{ ...inp, background:editUsed?C.surf:"#fff" }}>
                 {TIPE.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
             <div><label style={lbl}>Cabang</label>
-              <select value={form.branch} onChange={e=>setForm({...form,branch:e.target.value})} style={inp}>
+              <select value={form.branch} disabled={editUsed} onChange={e=>setForm({...form,branch:e.target.value})}
+                style={{ ...inp, background:editUsed?C.surf:"#fff" }}>
                 <option value="">— (umum)</option>
                 <option value="Progresif">Progresif</option>
                 <option value="Saraga">Saraga</option></select></div>
@@ -1449,23 +1488,27 @@ function COAView({ accounts, orgId, onChange }) {
           </div>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:14 }}>
             <div><label style={lbl}>Saldo Normal</label>
-              <select value={form.normal_side} onChange={e=>setForm({...form,normal_side:e.target.value})} style={inp}>
+              <select value={form.normal_side} disabled={editUsed} onChange={e=>setForm({...form,normal_side:e.target.value})}
+                style={{ ...inp, background:editUsed?C.surf:"#fff" }}>
                 <option value="Db">Debet (Db)</option>
                 <option value="Kr">Kredit (Kr)</option></select></div>
             <div><label style={lbl}>Masuk Laporan</label>
-              <select value={form.statement} onChange={e=>setForm({...form,statement:e.target.value})} style={inp}>
+              <select value={form.statement} disabled={editUsed} onChange={e=>setForm({...form,statement:e.target.value})}
+                style={{ ...inp, background:editUsed?C.surf:"#fff" }}>
                 <option value="LR">Laba Rugi (LR)</option>
                 <option value="NRC">Neraca (NRC)</option></select></div>
           </div>
-          <div style={{ fontSize:11.5, color:C.sub, marginBottom:12, lineHeight:1.5,
-            background:C.surf, padding:"10px 12px", borderRadius:8 }}>
-            Tips: Pendapatan/Ekuitas → sisi Kredit. Beban/Aset → sisi Debet. Kode akun mengikuti pola:
-            1-xxx (Aset), 3-xxx (Modal), 4-xxx (Pendapatan), 5-xxx (COGS), 6-xxx (Beban).
-          </div>
+          {!editUsed && (
+            <div style={{ fontSize:11.5, color:C.sub, marginBottom:12, lineHeight:1.5,
+              background:C.surf, padding:"10px 12px", borderRadius:8 }}>
+              Tips: Pendapatan/Ekuitas/Kewajiban(hutang) → sisi Kredit. Beban/Aset → sisi Debet. Pola kode:
+              1-xxx (Aset), 2-xxx (Hutang), 3-xxx (Modal), 4-xxx (Pendapatan), 5-xxx (COGS), 6-xxx (Beban).
+            </div>
+          )}
           <button className="btn" onClick={simpan} disabled={busy||!form.code||!form.name}
             style={{ width:"100%", padding:"11px", borderRadius:9,
-              background:(form.code&&form.name&&!busy)?C.teal:C.line, color:"#fff", fontWeight:700, fontSize:14 }}>
-            {busy?"Menyimpan…":"Simpan Akun"}</button>
+              background:(form.code&&form.name&&!busy)?(editId?C.brass:C.teal):C.line, color:"#fff", fontWeight:700, fontSize:14 }}>
+            {busy?"Menyimpan…":(editId?"Simpan Perubahan":"Simpan Akun")}</button>
         </div>
       )}
       {flash && <div className="pop" style={{ textAlign:"center", marginBottom:14,
@@ -1477,14 +1520,14 @@ function COAView({ accounts, orgId, onChange }) {
           style={{ border:"none", outline:"none", fontSize:13.5, flex:1, background:"transparent" }} /></div>
 
       <div className="card" style={{ overflow:"hidden" }}>
-        <div style={{ display:"grid", gridTemplateColumns:"110px 1fr 130px 55px 60px 90px", padding:"11px 18px",
+        <div style={{ display:"grid", gridTemplateColumns:"105px 1fr 120px 50px 55px 110px", padding:"11px 18px",
           background:C.deep, color:"#DDECEC", fontSize:12, fontWeight:600 }}>
           <span>KODE</span><span>NAMA AKUN</span><span>TIPE</span><span>SN</span><span>SUMBER</span>
           <span style={{ textAlign:"right" }}>AKSI</span></div>
         {rows.map(a=>{
           const nonaktif = a.is_active===false;
           return (
-            <div key={a.id} style={{ display:"grid", gridTemplateColumns:"110px 1fr 130px 55px 60px 90px",
+            <div key={a.id} style={{ display:"grid", gridTemplateColumns:"105px 1fr 120px 50px 55px 110px",
               padding:"9px 18px", borderBottom:`1px solid ${C.line}`, fontSize:12.5, alignItems:"center",
               opacity: nonaktif?0.45:1 }}>
               <span className="mono" style={{ fontWeight:600, color:C.deep }}>{a.code}</span>
@@ -1497,6 +1540,10 @@ function COAView({ accounts, orgId, onChange }) {
                 color:a.pay_source==="bank"?C.teal:a.pay_source==="kas"?C.kas:C.line }}>
                 {label[a.pay_source]||"—"}</span>
               <span className="no-print" style={{ display:"flex", gap:8, justifyContent:"flex-end" }}>
+                <button className="btn" onClick={()=>startEdit(a)} title="Edit"
+                  style={{ background:"transparent", color:C.sub }}
+                  onMouseEnter={ev=>ev.currentTarget.style.color=C.teal}
+                  onMouseLeave={ev=>ev.currentTarget.style.color=C.sub}><Pencil size={14} /></button>
                 <button className="btn" onClick={()=>toggle(a)} title={nonaktif?"Aktifkan":"Nonaktifkan"}
                   style={{ background:"transparent", color:nonaktif?C.pos:C.sub, fontSize:15 }}>
                   {nonaktif ? "○" : "●"}</button>
