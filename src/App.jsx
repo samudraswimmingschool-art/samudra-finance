@@ -16,6 +16,7 @@ import { C, money, moneyShort, pct, MONTHS, lbl, inp } from "./lib/ui";
 import {
   getMyProfile, getAccounts, getJournal, postJournal, deleteJournal,
   updateJournal, getJournalRange, rpcMonthlyTrend, rpcCashFlowDetail,
+  addAccount, deleteAccount, setAccountActive,
   rpcPnl, rpcBalanceSheet, rpcRetainedProfit, rpcCashFlow, rpcAccountBalances,
   periodRange, signOut,
 } from "./lib/api";
@@ -58,6 +59,9 @@ export default function App() {
   }, [session]);
 
   const orgId = profile?.org_id;
+  const reloadAccounts = useCallback(async () => {
+    if (orgId) setAccounts(await getAccounts(orgId));
+  }, [orgId]);
   const acctById = useMemo(() => {
     const m = {}; accounts.forEach((a) => (m[a.id] = a)); return m;
   }, [accounts]);
@@ -182,7 +186,7 @@ export default function App() {
           {tab==="balance"   && <Balance sheet={sheet} retained={retained} period={period} />}
           {tab==="equity"    && <Equity orgId={orgId} period={period} />}
           {tab==="cashflow"  && <CashFlow flow={flow} detail={flowDetail} />}
-          {tab==="coa"       && <COAView accounts={accounts} />}
+          {tab==="coa"       && <COAView accounts={accounts} orgId={orgId} onChange={reloadAccounts} />}
           </div>
         </main>
       </div>
@@ -460,7 +464,7 @@ function Transaksi({ accounts, acctByCode, acctById, journal, orgId, onChange })
 
   const pilihKategori = (key) => {
     setKat(key);
-    const opsi = accounts.filter(KATEGORI[key].filter);
+    const opsi = accounts.filter(a=>a.is_active!==false).filter(KATEGORI[key].filter);
     setForm({
       date: `${YEAR}-07-01`, jumlah: "", cash: "bank",
       lawan_id: opsi[0]?.id || "", memo: "",
@@ -551,7 +555,7 @@ function Transaksi({ accounts, acctByCode, acctById, journal, orgId, onChange })
 
   // ---- Tampilan form kategori terpilih ----
   const K = KATEGORI[kat];
-  const opsi = accounts.filter(K.filter);
+  const opsi = accounts.filter(a=>a.is_active!==false).filter(K.filter);
   const nominal = +form.jumlah || 0;
   return (
     <div className="pop">
@@ -747,7 +751,7 @@ function Journal({ accounts, acctById, acctByCode, journal, orgId, onChange }) {
         {draft.lines.map((l,i)=>(
           <div key={i} style={{ display:"grid", gridTemplateColumns:"1fr 150px 150px 34px", gap:8, marginBottom:7, alignItems:"center" }}>
             <select value={l.account_id} onChange={e=>setLine(i,"account_id",e.target.value)} style={inp}>
-              {accounts.map(a=><option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}</select>
+              {accounts.filter(a=>a.is_active!==false).map(a=><option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}</select>
             <input className="mono" inputMode="numeric" placeholder="0" value={l.debit}
               onChange={e=>setLine(i,"debit",e.target.value.replace(/\D/g,""))} style={{ ...inp, textAlign:"right" }} />
             <input className="mono" inputMode="numeric" placeholder="0" value={l.credit}
@@ -1359,34 +1363,155 @@ function CashFlow({ flow, detail }) {
 // ============================================================
 // CHART OF ACCOUNT
 // ============================================================
-function COAView({ accounts }) {
+function COAView({ accounts, orgId, onChange }) {
   const [q, setQ] = useState("");
-  const rows = accounts.filter(a=>a.name.toLowerCase().includes(q.toLowerCase())||a.code.includes(q));
+  const [showForm, setShowForm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState("");
+  const blank = () => ({ code:"", name:"", type:"Beban Kas", branch:"",
+    normal_side:"Db", statement:"LR", pay_source:"kas" });
+  const [form, setForm] = useState(blank());
+
   const label={bank:"Bank",kas:"Kas"};
+  const TIPE = ["Kas & Bank","Akun Piutang","Aktiva Tetap","Ekuitas",
+    "Pendapatan","COGS","Beban Op","Beban Kas","Other Income","Other Expense"];
+
+  const rows = accounts.filter(a=>a.name.toLowerCase().includes(q.toLowerCase())||a.code.includes(q));
+
+  const simpan = async () => {
+    if (!form.code || !form.name) { setFlash("✗ Kode dan nama wajib diisi"); return; }
+    setBusy(true); setFlash("");
+    try {
+      await addAccount(orgId, form);
+      setFlash("✓ Akun berhasil ditambahkan");
+      setForm(blank()); setShowForm(false);
+      onChange();
+    } catch (e) {
+      setFlash("✗ " + (e.message.includes("duplicate") ? "Kode akun sudah ada" : e.message));
+    } finally { setBusy(false); }
+  };
+
+  const hapus = async (a) => {
+    if (!confirm(`Hapus akun ${a.code} · ${a.name}?`)) return;
+    setFlash("");
+    try { await deleteAccount(a.id); setFlash("✓ Akun dihapus"); onChange(); }
+    catch (e) { setFlash("✗ " + e.message); alert(e.message); }
+  };
+
+  const toggle = async (a) => {
+    try { await setAccountActive(a.id, !a.is_active); onChange(); }
+    catch (e) { alert(e.message); }
+  };
+
   return (
     <div className="pop">
-      <PageHead eyebrow="Master Data" title="Chart of Account"
-        sub={`${accounts.length} akun · kolom "Sumber" menandai beban dari Bank atau Kas`} />
-      <div className="card" style={{ padding:"10px 14px", marginBottom:16, display:"flex", alignItems:"center", gap:8 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+        <PageHead eyebrow="Master Data" title="Chart of Account"
+          sub={`${accounts.length} akun · kelola akun keuangan Anda`} />
+        <button className="btn no-print" onClick={()=>{ setShowForm(!showForm); setFlash(""); }}
+          style={{ display:"flex", alignItems:"center", gap:6, background:showForm?C.surf:C.teal,
+            color:showForm?C.sub:"#fff", padding:"9px 16px", borderRadius:9, fontSize:13, fontWeight:600, marginTop:4 }}>
+          {showForm ? <><X size={15}/> Tutup</> : <><Plus size={15}/> Tambah Akun</>}
+        </button>
+      </div>
+
+      {/* Form tambah akun */}
+      {showForm && (
+        <div className="card pop" style={{ padding:20, marginBottom:16, border:`2px solid ${C.teal}` }}>
+          <div style={{ display:"grid", gridTemplateColumns:"140px 1fr", gap:12, marginBottom:12 }}>
+            <div><label style={lbl}>Kode Akun</label>
+              <input placeholder="mis. 6-60020" value={form.code}
+                onChange={e=>setForm({...form,code:e.target.value})} style={inp} /></div>
+            <div><label style={lbl}>Nama Akun</label>
+              <input placeholder="mis. Biaya Perawatan Kolam" value={form.name}
+                onChange={e=>setForm({...form,name:e.target.value})} style={inp} /></div>
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:12 }}>
+            <div><label style={lbl}>Tipe</label>
+              <select value={form.type} onChange={e=>{
+                const t=e.target.value;
+                // set default sisi & statement sesuai tipe
+                const kr=["Pendapatan","Ekuitas","Other Income"].includes(t);
+                const nrc=["Kas & Bank","Akun Piutang","Aktiva Tetap","Ekuitas"].includes(t);
+                setForm({...form, type:t, normal_side:kr?"Kr":"Db", statement:nrc?"NRC":"LR"});
+              }} style={inp}>
+                {TIPE.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
+            <div><label style={lbl}>Cabang</label>
+              <select value={form.branch} onChange={e=>setForm({...form,branch:e.target.value})} style={inp}>
+                <option value="">— (umum)</option>
+                <option value="Progresif">Progresif</option>
+                <option value="Saraga">Saraga</option></select></div>
+            <div><label style={lbl}>Sumber (untuk beban)</label>
+              <select value={form.pay_source||""} onChange={e=>setForm({...form,pay_source:e.target.value||null})} style={inp}>
+                <option value="">— (bukan beban)</option>
+                <option value="bank">Bank</option>
+                <option value="kas">Kas</option></select></div>
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:14 }}>
+            <div><label style={lbl}>Saldo Normal</label>
+              <select value={form.normal_side} onChange={e=>setForm({...form,normal_side:e.target.value})} style={inp}>
+                <option value="Db">Debet (Db)</option>
+                <option value="Kr">Kredit (Kr)</option></select></div>
+            <div><label style={lbl}>Masuk Laporan</label>
+              <select value={form.statement} onChange={e=>setForm({...form,statement:e.target.value})} style={inp}>
+                <option value="LR">Laba Rugi (LR)</option>
+                <option value="NRC">Neraca (NRC)</option></select></div>
+          </div>
+          <div style={{ fontSize:11.5, color:C.sub, marginBottom:12, lineHeight:1.5,
+            background:C.surf, padding:"10px 12px", borderRadius:8 }}>
+            Tips: Pendapatan/Ekuitas → sisi Kredit. Beban/Aset → sisi Debet. Kode akun mengikuti pola:
+            1-xxx (Aset), 3-xxx (Modal), 4-xxx (Pendapatan), 5-xxx (COGS), 6-xxx (Beban).
+          </div>
+          <button className="btn" onClick={simpan} disabled={busy||!form.code||!form.name}
+            style={{ width:"100%", padding:"11px", borderRadius:9,
+              background:(form.code&&form.name&&!busy)?C.teal:C.line, color:"#fff", fontWeight:700, fontSize:14 }}>
+            {busy?"Menyimpan…":"Simpan Akun"}</button>
+        </div>
+      )}
+      {flash && <div className="pop" style={{ textAlign:"center", marginBottom:14,
+        color:flash.startsWith("✓")?C.pos:C.neg, fontSize:13, fontWeight:600 }}>{flash}</div>}
+
+      <div className="card no-print" style={{ padding:"10px 14px", marginBottom:16, display:"flex", alignItems:"center", gap:8 }}>
         <Search size={16} color={C.sub} />
         <input placeholder="Cari akun…" value={q} onChange={e=>setQ(e.target.value)}
           style={{ border:"none", outline:"none", fontSize:13.5, flex:1, background:"transparent" }} /></div>
+
       <div className="card" style={{ overflow:"hidden" }}>
-        <div style={{ display:"grid", gridTemplateColumns:"120px 1fr 150px 60px 70px", padding:"11px 18px",
+        <div style={{ display:"grid", gridTemplateColumns:"110px 1fr 130px 55px 60px 90px", padding:"11px 18px",
           background:C.deep, color:"#DDECEC", fontSize:12, fontWeight:600 }}>
-          <span>KODE</span><span>NAMA AKUN</span><span>TIPE</span><span>SN</span><span>SUMBER</span></div>
-        {rows.map(a=>(
-          <div key={a.code} style={{ display:"grid", gridTemplateColumns:"120px 1fr 150px 60px 70px",
-            padding:"9px 18px", borderBottom:`1px solid ${C.line}`, fontSize:12.5, alignItems:"center" }}>
-            <span className="mono" style={{ fontWeight:600, color:C.deep }}>{a.code}</span>
-            <span>{a.name}</span>
-            <span style={{ color:C.sub }}>{a.type}</span>
-            <span style={{ color:C.sub }}>{a.normal_side}</span>
-            <span style={{ fontWeight:600, fontSize:11.5,
-              color:a.pay_source==="bank"?C.teal:a.pay_source==="kas"?C.kas:C.line }}>
-              {label[a.pay_source]||"—"}</span>
-          </div>
-        ))}
+          <span>KODE</span><span>NAMA AKUN</span><span>TIPE</span><span>SN</span><span>SUMBER</span>
+          <span style={{ textAlign:"right" }}>AKSI</span></div>
+        {rows.map(a=>{
+          const nonaktif = a.is_active===false;
+          return (
+            <div key={a.id} style={{ display:"grid", gridTemplateColumns:"110px 1fr 130px 55px 60px 90px",
+              padding:"9px 18px", borderBottom:`1px solid ${C.line}`, fontSize:12.5, alignItems:"center",
+              opacity: nonaktif?0.45:1 }}>
+              <span className="mono" style={{ fontWeight:600, color:C.deep }}>{a.code}</span>
+              <span>{a.name}{a.branch && <span style={{ fontSize:10, color:C.sub }}> · {a.branch}</span>}
+                {nonaktif && <span style={{ fontSize:9.5, fontWeight:700, marginLeft:6, padding:"1px 6px",
+                  borderRadius:20, background:C.neg+"18", color:C.neg }}>NONAKTIF</span>}</span>
+              <span style={{ color:C.sub }}>{a.type}</span>
+              <span style={{ color:C.sub }}>{a.normal_side}</span>
+              <span style={{ fontWeight:600, fontSize:11.5,
+                color:a.pay_source==="bank"?C.teal:a.pay_source==="kas"?C.kas:C.line }}>
+                {label[a.pay_source]||"—"}</span>
+              <span className="no-print" style={{ display:"flex", gap:8, justifyContent:"flex-end" }}>
+                <button className="btn" onClick={()=>toggle(a)} title={nonaktif?"Aktifkan":"Nonaktifkan"}
+                  style={{ background:"transparent", color:nonaktif?C.pos:C.sub, fontSize:15 }}>
+                  {nonaktif ? "○" : "●"}</button>
+                <button className="btn" onClick={()=>hapus(a)} title="Hapus"
+                  style={{ background:"transparent", color:C.sub }}
+                  onMouseEnter={ev=>ev.currentTarget.style.color=C.neg}
+                  onMouseLeave={ev=>ev.currentTarget.style.color=C.sub}><Trash2 size={14} /></button>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ fontSize:11.5, color:C.sub, marginTop:12, lineHeight:1.5 }}>
+        Akun yang sudah dipakai di jurnal tidak bisa dihapus (demi keamanan laporan) — gunakan tombol
+        nonaktifkan (●) untuk menyembunyikannya dari pilihan transaksi.
       </div>
     </div>
   );

@@ -39,6 +39,56 @@ export async function getAccounts(orgId) {
   return data;
 }
 
+// Tambah akun baru
+export async function addAccount(orgId, acc) {
+  const { data, error } = await supabase
+    .from("accounts")
+    .insert({
+      org_id: orgId,
+      code: acc.code,
+      name: acc.name,
+      type: acc.type,
+      branch: acc.branch || null,
+      normal_side: acc.normal_side,
+      statement: acc.statement,
+      pay_source: acc.pay_source || null,
+      is_active: true,
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+// Cek apakah akun sudah dipakai di jurnal (untuk keamanan hapus)
+export async function accountUsedCount(accountId) {
+  const { count, error } = await supabase
+    .from("journal_lines")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId);
+  if (error) throw error;
+  return count || 0;
+}
+
+// Hapus akun (hanya jika belum dipakai)
+export async function deleteAccount(accountId) {
+  const used = await accountUsedCount(accountId);
+  if (used > 0) {
+    throw new Error(`Akun tidak bisa dihapus karena sudah dipakai di ${used} transaksi. Nonaktifkan saja.`);
+  }
+  const { error } = await supabase.from("accounts").delete().eq("id", accountId);
+  if (error) throw error;
+}
+
+// Aktif / nonaktif akun
+export async function setAccountActive(accountId, active) {
+  const { error } = await supabase
+    .from("accounts")
+    .update({ is_active: active })
+    .eq("id", accountId);
+  if (error) throw error;
+}
+
 // ---- Jurnal: ambil daftar (header + baris) ----
 export async function getJournal(orgId, start, end) {
   const { data, error } = await supabase
