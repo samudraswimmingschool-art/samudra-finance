@@ -91,6 +91,64 @@ export async function deleteJournal(entryId) {
   if (error) throw error;
 }
 
+// ---- Update jurnal (edit): hapus baris lama, ganti header + baris baru ----
+export async function updateJournal(entryId, orgId, entry) {
+  const { error: eh } = await supabase
+    .from("journal_entries")
+    .update({
+      entry_date: entry.date,
+      memo: entry.memo,
+      cash_source: entry.cash,
+    })
+    .eq("id", entryId);
+  if (eh) throw eh;
+
+  // ganti seluruh baris
+  const { error: ed } = await supabase.from("journal_lines").delete().eq("entry_id", entryId);
+  if (ed) throw ed;
+
+  const rows = entry.lines
+    .filter((l) => (l.debit || 0) > 0 || (l.credit || 0) > 0)
+    .map((l) => ({
+      entry_id: entryId,
+      account_id: l.account_id,
+      debit: l.debit || 0,
+      credit: l.credit || 0,
+    }));
+  const { error: ei } = await supabase.from("journal_lines").insert(rows);
+  if (ei) throw ei; // trigger tetap menolak jika debet≠kredit
+  return true;
+}
+
+// ---- Jurnal dengan rentang tanggal spesifik (filter tanggal) ----
+export async function getJournalRange(orgId, start, end) {
+  const { data, error } = await supabase
+    .from("journal_entries")
+    .select("id, entry_date, memo, cash_source, kind, journal_lines(account_id, debit, credit)")
+    .eq("org_id", orgId)
+    .gte("entry_date", start)
+    .lte("entry_date", end)
+    .order("entry_date", { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+// ---- Tren bulanan (Analisis) ----
+export async function rpcMonthlyTrend(orgId, year) {
+  const { data, error } = await supabase.rpc("monthly_trend", { p_org: orgId, p_year: year });
+  if (error) throw error;
+  return data;
+}
+
+// ---- Arus Kas detail (per transaksi) ----
+export async function rpcCashFlowDetail(orgId, start, end) {
+  const { data, error } = await supabase.rpc("cash_flow_detail", {
+    p_org: orgId, p_start: start, p_end: end,
+  });
+  if (error) throw error;
+  return data;
+}
+
 // ---- Laporan via RPC ----
 export async function rpcAccountBalances(orgId, start, end) {
   const { data, error } = await supabase.rpc("account_balances", {

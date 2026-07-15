@@ -3,7 +3,8 @@ import {
   LayoutDashboard, BookOpen, Layers, Scale, ScrollText, Landmark,
   TrendingUp, ArrowLeftRight, Building2, Plus, Trash2, Check, AlertCircle,
   Search, LogOut, RefreshCw, Wallet, ArrowDownCircle, ArrowUpCircle,
-  PiggyBank, ShoppingCart, ChevronLeft
+  PiggyBank, ShoppingCart, ChevronLeft, Pencil, BarChart3, X,
+  TrendingDown, Lightbulb
 } from "lucide-react";
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -14,6 +15,7 @@ import Login from "./components/Login";
 import { C, money, moneyShort, pct, MONTHS, lbl, inp } from "./lib/ui";
 import {
   getMyProfile, getAccounts, getJournal, postJournal, deleteJournal,
+  updateJournal, getJournalRange, rpcMonthlyTrend, rpcCashFlowDetail,
   rpcPnl, rpcBalanceSheet, rpcRetainedProfit, rpcCashFlow, rpcAccountBalances,
   periodRange, signOut,
 } from "./lib/api";
@@ -35,6 +37,8 @@ export default function App() {
   const [sheet, setSheet] = useState([]);
   const [retained, setRetained] = useState(0);
   const [flow, setFlow] = useState([]);
+  const [flowDetail, setFlowDetail] = useState([]);
+  const [trend, setTrend] = useState([]);
 
   // --- auth session ---
   useEffect(() => {
@@ -75,8 +79,14 @@ export default function App() {
       else if (tab === "balance") {
         setSheet(await rpcBalanceSheet(orgId, asOf));
         setRetained(await rpcRetainedProfit(orgId, asOf));
-      } else if (tab === "cashflow") setFlow(await rpcCashFlow(orgId, start, end));
-      else if (tab === "dashboard") {
+      } else if (tab === "cashflow") {
+        setFlow(await rpcCashFlow(orgId, start, end));
+        setFlowDetail(await rpcCashFlowDetail(orgId, start, end));
+      } else if (tab === "analisis") {
+        setPnl(await rpcPnl(orgId, start, end));
+        setBalances(await rpcAccountBalances(orgId, start, end));
+        setTrend(await rpcMonthlyTrend(orgId, YEAR));
+      } else if (tab === "dashboard") {
         setPnl(await rpcPnl(orgId, start, end));
         setBalances(await rpcAccountBalances(orgId, start, end));
       }
@@ -158,12 +168,13 @@ export default function App() {
                                           journal={journal} acctById={acctById} orgId={orgId} onChange={load} />}
           {tab==="journal"   && <Journal accounts={accounts} acctById={acctById} acctByCode={acctByCode}
                                           journal={journal} orgId={orgId} onChange={load} />}
+          {tab==="analisis"  && <Analisis pnl={pnl} balances={balances} trend={trend} />}
           {tab==="ledger"    && <Ledger balances={balances} />}
           {tab==="trial"     && <Trial balances={balances} />}
           {tab==="pnl"       && <PnL pnl={pnl} period={period} />}
           {tab==="balance"   && <Balance sheet={sheet} retained={retained} period={period} />}
           {tab==="equity"    && <Equity orgId={orgId} period={period} />}
-          {tab==="cashflow"  && <CashFlow flow={flow} />}
+          {tab==="cashflow"  && <CashFlow flow={flow} detail={flowDetail} />}
           {tab==="coa"       && <COAView accounts={accounts} />}
         </main>
       </div>
@@ -177,6 +188,7 @@ const NAV = [
   { id:"transaksi", label:"Transaksi", icon:Wallet },
   { id:"journal", label:"Jurnal Umum", icon:BookOpen },
   { sec:"LAPORAN" },
+  { id:"analisis", label:"Analisis Keuangan", icon:BarChart3 },
   { id:"ledger", label:"Buku Besar", icon:Layers },
   { id:"trial", label:"Neraca Saldo", icon:Scale },
   { id:"pnl", label:"Laba Rugi", icon:ScrollText },
@@ -186,7 +198,7 @@ const NAV = [
   { sec:"DATA" },
   { id:"coa", label:"Chart of Account", icon:Building2 },
 ];
-const SHOW_PERIOD = ["dashboard","transaksi","journal","ledger","trial","pnl","balance","equity","cashflow"];
+const SHOW_PERIOD = ["dashboard","transaksi","journal","analisis","ledger","trial","pnl","balance","equity","cashflow"];
 
 function periodBtn(active, small) {
   return { padding: small?"6px 10px":"6px 14px", borderRadius:8, fontSize:12.5, fontWeight:600,
@@ -497,10 +509,14 @@ function Journal({ accounts, acctById, acctByCode, journal, orgId, onChange }) {
   const blank = () => ({ date:`${YEAR}-07-01`, memo:"", cash:"bank",
     lines:[{ account_id:first, debit:"", credit:"" }, { account_id:bank, debit:"", credit:"" }] });
   const [draft, setDraft] = useState(blank());
+  const [editId, setEditId] = useState(null);      // id jurnal yang sedang diedit
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState("");
+  // filter tanggal (revisi #4)
+  const [fStart, setFStart] = useState("");
+  const [fEnd, setFEnd] = useState("");
 
-  useEffect(()=>{ setDraft(blank()); /* eslint-disable-next-line */ }, [accounts.length]);
+  useEffect(()=>{ if(!editId) setDraft(blank()); /* eslint-disable-next-line */ }, [accounts.length]);
 
   const dTot = draft.lines.reduce((s,l)=>s+(+l.debit||0),0);
   const cTot = draft.lines.reduce((s,l)=>s+(+l.credit||0),0);
@@ -510,15 +526,36 @@ function Journal({ accounts, acctById, acctByCode, journal, orgId, onChange }) {
   const addLine=()=>setDraft({...draft,lines:[...draft.lines,{account_id:accounts[0]?.id,debit:"",credit:""}]});
   const rmLine=(i)=>setDraft({...draft,lines:draft.lines.filter((_,x)=>x!==i)});
 
+  const startEdit = (e) => {
+    setEditId(e.id);
+    setDraft({
+      date: e.entry_date, memo: e.memo, cash: e.cash_source || "bank",
+      lines: e.journal_lines.map(l=>({
+        account_id: l.account_id,
+        debit: Number(l.debit) || "",
+        credit: Number(l.credit) || "",
+      })),
+    });
+    window.scrollTo({ top:0, behavior:"smooth" });
+  };
+  const cancelEdit = () => { setEditId(null); setDraft(blank()); setFlash(""); };
+
   const post = async () => {
     if (!balanced || !draft.memo) return;
     setBusy(true); setFlash("");
     try {
-      await postJournal(orgId, {
+      const payload = {
         date: draft.date, memo: draft.memo, cash: draft.cash,
         lines: draft.lines.map(l=>({ account_id:l.account_id, debit:+l.debit||0, credit:+l.credit||0 })),
-      });
-      setDraft(blank()); setFlash("✓ Jurnal diposting & tersimpan permanen");
+      };
+      if (editId) {
+        await updateJournal(editId, orgId, payload);
+        setFlash("✓ Jurnal berhasil diperbarui");
+      } else {
+        await postJournal(orgId, payload);
+        setFlash("✓ Jurnal diposting & tersimpan permanen");
+      }
+      setEditId(null); setDraft(blank());
       onChange();
     } catch (e) { setFlash("✗ " + e.message); }
     finally { setBusy(false); }
@@ -526,8 +563,17 @@ function Journal({ accounts, acctById, acctByCode, journal, orgId, onChange }) {
 
   const del = async (id) => {
     if (!confirm("Hapus jurnal ini?")) return;
-    await deleteJournal(id); onChange();
+    await deleteJournal(id);
+    if (editId===id) cancelEdit();
+    onChange();
   };
+
+  // terapkan filter tanggal ke daftar (client-side)
+  const shown = journal.filter(e=>{
+    if (fStart && e.entry_date < fStart) return false;
+    if (fEnd && e.entry_date > fEnd) return false;
+    return true;
+  });
 
   return (
     <div className="pop">
@@ -542,7 +588,17 @@ function Journal({ accounts, acctById, acctByCode, journal, orgId, onChange }) {
           <b>Kas (Petty Cash)</b> — iklan, ATK, air minum, komunikasi, event, pembelian.</div>
       </div>
 
-      <div className="card" style={{ padding:20, marginBottom:20 }}>
+      <div className="card" style={{ padding:20, marginBottom:20,
+        border: editId?`2px solid ${C.brass}`:`1px solid ${C.line}` }}>
+        {editId && (
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14,
+            padding:"8px 12px", borderRadius:8, background:C.brass+"15", color:C.brass, fontWeight:600, fontSize:13 }}>
+            <span><Pencil size={14} style={{ verticalAlign:"-2px", marginRight:6 }} />Mode Edit — mengubah jurnal</span>
+            <button className="btn" onClick={cancelEdit}
+              style={{ background:"transparent", color:C.brass, display:"flex", alignItems:"center", gap:4, fontSize:12.5 }}>
+              <X size={14} /> Batal</button>
+          </div>
+        )}
         <div style={{ display:"flex", gap:12, marginBottom:14 }}>
           <div style={{ flex:"0 0 145px" }}><label style={lbl}>Tanggal</label>
             <input type="date" value={draft.date} onChange={e=>setDraft({...draft,date:e.target.value})} style={inp} /></div>
@@ -583,26 +639,39 @@ function Journal({ accounts, acctById, acctByCode, journal, orgId, onChange }) {
           <div style={{ display:"flex", alignItems:"center", gap:8, fontSize:13, fontWeight:600,
             color: balanced?C.pos:(dTot||cTot)?C.neg:C.sub }}>
             {balanced?<Check size={16}/>:<AlertCircle size={16}/>}
-            {balanced?"Debet = Kredit — siap posting":(dTot||cTot)?"Debet dan Kredit belum seimbang":"Masukkan nominal"}</div>
+            {balanced?"Debet = Kredit — siap simpan":(dTot||cTot)?"Debet dan Kredit belum seimbang":"Masukkan nominal"}</div>
           <div className="mono" style={{ fontSize:13, color:C.sub }}>D {money(dTot)} · K {money(cTot)}</div>
         </div>
         <button className="btn" onClick={post} disabled={!balanced||!draft.memo||busy}
           style={{ width:"100%", marginTop:12, padding:"12px", borderRadius:10,
-            background: balanced&&draft.memo&&!busy?C.teal:C.line, color:"#fff", fontWeight:700, fontSize:14.5 }}>
-          {busy?"Menyimpan…":"Posting ke Buku Besar"}</button>
+            background: balanced&&draft.memo&&!busy?(editId?C.brass:C.teal):C.line, color:"#fff", fontWeight:700, fontSize:14.5 }}>
+          {busy?"Menyimpan…":(editId?"Simpan Perubahan":"Posting ke Buku Besar")}</button>
         {flash && <div className="pop" style={{ marginTop:10, textAlign:"center",
           color:flash.startsWith("✓")?C.pos:C.neg, fontSize:13, fontWeight:600 }}>{flash}</div>}
       </div>
 
+      {/* filter tanggal */}
+      <div className="card" style={{ padding:"12px 16px", marginBottom:14, display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+        <span style={{ fontSize:12.5, color:C.sub, fontWeight:600 }}>Filter tanggal:</span>
+        <input type="date" value={fStart} onChange={e=>setFStart(e.target.value)} style={{ ...inp, width:160 }} />
+        <span style={{ color:C.sub }}>s/d</span>
+        <input type="date" value={fEnd} onChange={e=>setFEnd(e.target.value)} style={{ ...inp, width:160 }} />
+        {(fStart||fEnd) && <button className="btn" onClick={()=>{setFStart("");setFEnd("");}}
+          style={{ background:C.surf, color:C.sub, padding:"7px 12px", borderRadius:8, fontSize:12.5, fontWeight:600 }}>
+          Reset</button>}
+      </div>
+
       <div className="card" style={{ overflow:"hidden" }}>
         <div style={{ padding:"14px 18px", fontWeight:600, fontSize:14.5, borderBottom:`1px solid ${C.line}` }}>
-          Riwayat Jurnal <span style={{ color:C.sub, fontWeight:400 }}>· {journal.length} entri (periode ini)</span></div>
-        {journal.length===0 && <div style={{ padding:"20px 18px", color:C.sub, fontSize:13 }}>Belum ada jurnal pada periode ini.</div>}
-        {journal.map(e=>{
+          Riwayat Jurnal <span style={{ color:C.sub, fontWeight:400 }}>· {shown.length} entri
+          {(fStart||fEnd)?" (terfilter)":" (periode ini)"}</span></div>
+        {shown.length===0 && <div style={{ padding:"20px 18px", color:C.sub, fontSize:13 }}>Tidak ada jurnal pada rentang ini.</div>}
+        {shown.map(e=>{
           const t = e.journal_lines.reduce((s,l)=>s+(Number(l.debit)||0),0);
           const isKas = e.cash_source==="kas";
           return (
-            <div key={e.id} style={{ padding:"13px 18px", borderBottom:`1px solid ${C.line}` }}>
+            <div key={e.id} style={{ padding:"13px 18px", borderBottom:`1px solid ${C.line}`,
+              background: editId===e.id ? C.brass+"08" : "transparent" }}>
               <div style={{ display:"flex", justifyContent:"space-between", marginBottom:7 }}>
                 <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                   <span style={{ fontWeight:600, fontSize:13.5 }}>{e.memo}</span>
@@ -612,13 +681,17 @@ function Journal({ accounts, acctById, acctByCode, journal, orgId, onChange }) {
                   {e.kind!=="general" && <span style={{ fontSize:10.5, fontWeight:700, padding:"2px 7px",
                     borderRadius:20, background:C.brass+"20", color:C.brass }}>{e.kind.toUpperCase()}</span>}
                 </div>
-                <div style={{ display:"flex", gap:14, alignItems:"center" }}>
+                <div style={{ display:"flex", gap:12, alignItems:"center" }}>
                   <span style={{ fontSize:12, color:C.sub }}>{e.entry_date}</span>
                   <span className="mono" style={{ fontSize:13, fontWeight:700, color:C.teal }}>{money(t)}</span>
-                  <button className="btn" onClick={()=>del(e.id)}
-                    style={{ background:"transparent", color:C.line }}
+                  <button className="btn" onClick={()=>startEdit(e)} title="Edit"
+                    style={{ background:"transparent", color:C.sub }}
+                    onMouseEnter={ev=>ev.currentTarget.style.color=C.teal}
+                    onMouseLeave={ev=>ev.currentTarget.style.color=C.sub}><Pencil size={14} /></button>
+                  <button className="btn" onClick={()=>del(e.id)} title="Hapus"
+                    style={{ background:"transparent", color:C.sub }}
                     onMouseEnter={ev=>ev.currentTarget.style.color=C.neg}
-                    onMouseLeave={ev=>ev.currentTarget.style.color=C.line}><Trash2 size={14} /></button>
+                    onMouseLeave={ev=>ev.currentTarget.style.color=C.sub}><Trash2 size={14} /></button>
                 </div>
               </div>
               {e.journal_lines.map((l,i)=>(
@@ -910,33 +983,234 @@ function Equity({ orgId, period }) {
 }
 
 // ============================================================
-// CASH FLOW
+// ANALISIS KEUANGAN — rasio, tren, per cabang, insight otomatis
 // ============================================================
-function CashFlow({ flow }) {
-  const bank = flow.filter(f=>f.code==="1-10002"||f.code==="1-10001");
-  const kas = flow.filter(f=>f.code==="1-10007");
-  const Block=({title,rows,tone})=>(
-    <div className="card" style={{ overflow:"hidden", marginBottom:14 }}>
-      <div style={{ padding:"11px 20px", background:tone+"15", fontWeight:700, color:C.deep, fontSize:13 }}>{title}</div>
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 130px 130px 130px", padding:"9px 20px",
-        fontSize:11.5, color:C.sub, fontWeight:600, borderBottom:`1px solid ${C.line}` }}>
-        <span>AKUN</span><span style={{ textAlign:"right" }}>MASUK</span>
-        <span style={{ textAlign:"right" }}>KELUAR</span><span style={{ textAlign:"right" }}>NET</span></div>
-      {rows.length?rows.map(f=>(
-        <div key={f.code+f.cash_source} style={{ display:"grid", gridTemplateColumns:"1fr 130px 130px 130px",
-          padding:"10px 20px", borderBottom:`1px solid ${C.line}`, fontSize:13 }}>
-          <span><b style={{ color:C.deep }}>{f.code}</b> <span style={{ color:C.sub }}>{f.name}</span></span>
-          <span className="mono" style={{ textAlign:"right", color:C.pos }}>{money(Number(f.masuk))}</span>
-          <span className="mono" style={{ textAlign:"right", color:C.neg }}>{money(Number(f.keluar))}</span>
-          <span className="mono" style={{ textAlign:"right", fontWeight:700 }}>{money(Number(f.net))}</span></div>
-      )):<div style={{ padding:"12px 20px", fontSize:12.5, color:C.sub, fontStyle:"italic" }}>Tidak ada mutasi.</div>}
-    </div>
-  );
+function Analisis({ pnl, balances, trend }) {
+  const S = (type,branch) => pnl.filter(r=>r.type===type&&(!branch||r.branch===branch))
+    .reduce((s,r)=>s+Number(r.amount),0);
+  const rev=S("Pendapatan"), revP=S("Pendapatan","Progresif"), revS=S("Pendapatan","Saraga");
+  const cogs=S("COGS"), opBank=S("Beban Op"), opP=S("Beban Op","Progresif"), opS=S("Beban Op","Saraga");
+  const kasBeban=S("Beban Kas"), oi=S("Other Income"), oe=S("Other Expense");
+  const totalBeban=cogs+opBank+kasBeban+oe;
+  const laba=rev-totalBeban+oi;
+  const labaKotor=rev-cogs;
+
+  // rasio
+  const npm = rev ? laba/rev : 0;                        // net profit margin
+  const gpm = rev ? labaKotor/rev : 0;                   // gross profit margin
+  const coachRatio = rev ? (opP+opS)/rev : 0;            // biaya pelatih thd pendapatan
+  const bebanRatio = rev ? totalBeban/rev : 0;           // efisiensi beban
+  const modal = balances.filter(b=>b.type==="Ekuitas").reduce((s,b)=>s+Number(b.balance),0);
+  const roi = modal ? laba/modal : 0;
+
+  // per cabang
+  const kontribP = revP-opP, kontribS = revS-opS;
+  const totalKontrib = kontribP+kontribS;
+
+  // insight otomatis (revisi #3)
+  const insights = [];
+  if (rev===0) insights.push({ t:"info", m:"Belum ada pendapatan pada periode ini. Input transaksi untuk melihat analisis." });
+  else {
+    if (npm < 0) insights.push({ t:"bad", m:`Bisnis rugi ${money(Math.abs(laba))} periode ini. Beban (${money(totalBeban)}) melebihi pendapatan. Tinjau pos beban terbesar.` });
+    else if (npm < 0.15) insights.push({ t:"warn", m:`Margin laba bersih ${pct(npm)} di bawah target sehat (15%). Pertimbangkan efisiensi beban atau naikkan pendapatan.` });
+    else insights.push({ t:"good", m:`Margin laba bersih ${pct(npm)} sehat (target ≥15%). Profitabilitas baik.` });
+
+    if (coachRatio > 0.5) insights.push({ t:"warn", m:`Biaya pelatih ${pct(coachRatio)} dari pendapatan — cukup tinggi (>50%). Cek rasio pelatih terhadap jumlah siswa.` });
+    else if (coachRatio > 0) insights.push({ t:"good", m:`Biaya pelatih ${pct(coachRatio)} dari pendapatan, masih dalam batas wajar.` });
+
+    if (revP>0 && revS>0) {
+      const lebihUntung = kontribP/Math.max(revP,1) > kontribS/Math.max(revS,1) ? "Progresif" : "Saraga";
+      insights.push({ t:"info", m:`Cabang ${lebihUntung} memberi kontribusi laba lebih efisien per rupiah pendapatan. Fokuskan pertumbuhan di sana.` });
+    }
+    if (revS===0 && revP>0) insights.push({ t:"info", m:"Cabang Saraga belum ada pendapatan periode ini. Bandingkan setelah keduanya aktif." });
+
+    // tren: bandingkan 2 bulan terakhir yang ada data
+    const aktif = trend.filter(t=>Number(t.pendapatan)>0);
+    if (aktif.length>=2) {
+      const a=aktif[aktif.length-2], b=aktif[aktif.length-1];
+      const delta=(Number(b.laba)-Number(a.laba));
+      if (delta<0) insights.push({ t:"warn", m:`Laba bulan terakhir turun ${money(Math.abs(delta))} dibanding bulan sebelumnya. Cek kenaikan beban atau penurunan pendapatan.` });
+      else insights.push({ t:"good", m:`Laba bulan terakhir naik ${money(delta)} dibanding bulan sebelumnya. Tren positif.` });
+    }
+  }
+
+  const trendData = trend.map(t=>({
+    m: MONTHS[Number(t.bulan)-1]?.slice(0,3) || t.bulan,
+    rev: Number(t.pendapatan), exp: Number(t.beban), profit: Number(t.laba),
+  }));
+
+  const ratios = [
+    { name:"Margin Laba Bersih", val:npm, fmt:"pct", target:"≥15%", ok:npm>=0.15, hint:"Laba bersih ÷ pendapatan" },
+    { name:"Margin Laba Kotor", val:gpm, fmt:"pct", target:"≥40%", ok:gpm>=0.4, hint:"(Pendapatan − COGS) ÷ pendapatan" },
+    { name:"Rasio Biaya Pelatih", val:coachRatio, fmt:"pct", target:"≤50%", ok:coachRatio<=0.5&&coachRatio>0, hint:"Gaji pelatih ÷ pendapatan" },
+    { name:"Rasio Beban", val:bebanRatio, fmt:"pct", target:"≤85%", ok:bebanRatio<=0.85&&bebanRatio>0, hint:"Total beban ÷ pendapatan" },
+    { name:"ROI (Return on Investment)", val:roi, fmt:"pct", target:"≥20%", ok:roi>=0.2, hint:"Laba ÷ modal" },
+  ];
+
   return (
     <div className="pop">
-      <PageHead eyebrow="Turunan Otomatis" title="Laporan Arus Kas" sub="Mutasi Bank & Kas periode berjalan" />
-      <Block title="BANK" rows={bank} tone={C.teal} />
-      <Block title="KAS (PETTY CASH)" rows={kas} tone={C.kas} />
+      <PageHead eyebrow="Turunan Otomatis" title="Analisis Keuangan"
+        sub="Rasio, tren, perbandingan cabang, & rekomendasi otomatis" />
+
+      {/* Insight otomatis */}
+      <div className="card" style={{ padding:"18px 20px", marginBottom:16 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12 }}>
+          <Lightbulb size={18} color={C.brass} />
+          <span style={{ fontWeight:700, fontSize:15 }}>Kesimpulan & Rekomendasi</span>
+        </div>
+        <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+          {insights.map((ins,i)=>{
+            const c = ins.t==="good"?C.pos:ins.t==="bad"?C.neg:ins.t==="warn"?C.brass:C.teal;
+            return (
+              <div key={i} style={{ display:"flex", gap:10, alignItems:"flex-start",
+                padding:"10px 14px", borderRadius:9, background:c+"0D", borderLeft:`3px solid ${c}` }}>
+                <span style={{ fontSize:13, color:C.ink, lineHeight:1.5 }}>{ins.m}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Rasio */}
+      <div className="card" style={{ padding:"18px 20px", marginBottom:16 }}>
+        <div style={{ fontWeight:600, fontSize:14.5, marginBottom:14 }}>Rasio Keuangan</div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))", gap:16 }}>
+          {ratios.map(r=>(
+            <div key={r.name} style={{ borderLeft:`3px solid ${r.ok?C.pos:C.neg}`, paddingLeft:12 }}>
+              <div style={{ fontSize:12.5, color:C.sub, marginBottom:4 }}>{r.name}</div>
+              <div className="mono" style={{ fontSize:22, fontWeight:700, color:r.ok?C.pos:C.neg }}>{pct(r.val)}</div>
+              <div style={{ fontSize:11, color:C.sub, marginTop:2 }}>Target {r.target}</div>
+              <div style={{ fontSize:10.5, color:C.sub, marginTop:3, fontStyle:"italic" }}>{r.hint}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Tren bulanan */}
+      <div style={{ display:"grid", gridTemplateColumns:"1.5fr 1fr", gap:16, marginBottom:16 }}>
+        <div className="card" style={{ padding:"18px 18px 8px" }}>
+          <div style={{ fontWeight:600, fontSize:14.5, marginBottom:2 }}>Tren Pendapatan vs Beban</div>
+          <div style={{ fontSize:12, color:C.sub, marginBottom:8 }}>Sepanjang {YEAR}</div>
+          <ResponsiveContainer width="100%" height={220}>
+            <AreaChart data={trendData} margin={{ left:-18, right:6, top:10 }}>
+              <defs>
+                <linearGradient id="ar" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.teal} stopOpacity={.35}/><stop offset="100%" stopColor={C.teal} stopOpacity={0}/></linearGradient>
+                <linearGradient id="ae" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.brass} stopOpacity={.28}/><stop offset="100%" stopColor={C.brass} stopOpacity={0}/></linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
+              <XAxis dataKey="m" tick={{ fontSize:12, fill:C.sub }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize:11, fill:C.sub }} tickFormatter={moneyShort} axisLine={false} tickLine={false} width={54} />
+              <Tooltip formatter={(v)=>money(v)} contentStyle={{ borderRadius:10, border:`1px solid ${C.line}`, fontSize:12 }} />
+              <Area type="monotone" dataKey="rev" stroke={C.teal} strokeWidth={2.4} fill="url(#ar)" name="Pendapatan" />
+              <Area type="monotone" dataKey="exp" stroke={C.brass} strokeWidth={2.4} fill="url(#ae)" name="Beban" />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="card" style={{ padding:"18px 18px 8px" }}>
+          <div style={{ fontWeight:600, fontSize:14.5, marginBottom:2 }}>Laba per Bulan</div>
+          <div style={{ fontSize:12, color:C.sub, marginBottom:8 }}>Net profit {YEAR}</div>
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={trendData} margin={{ left:-18, right:6, top:10 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
+              <XAxis dataKey="m" tick={{ fontSize:12, fill:C.sub }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize:11, fill:C.sub }} tickFormatter={moneyShort} axisLine={false} tickLine={false} width={54} />
+              <Tooltip formatter={(v)=>money(v)} contentStyle={{ borderRadius:10, border:`1px solid ${C.line}`, fontSize:12 }} />
+              <Bar dataKey="profit" radius={[5,5,0,0]}>{trendData.map((d,i)=><Cell key={i} fill={d.profit>=0?C.pos:C.neg} />)}</Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* Perbandingan cabang */}
+      <div className="card" style={{ padding:"18px 20px" }}>
+        <div style={{ fontWeight:600, fontSize:14.5, marginBottom:14 }}>Perbandingan Cabang — mana lebih untung?</div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
+          {[{n:"Progresif",r:revP,o:opP,k:kontribP,c:C.teal},{n:"Saraga",r:revS,o:opS,k:kontribS,c:C.brass}].map(b=>{
+            const eff = b.r ? b.k/b.r : 0;
+            return (
+              <div key={b.n} style={{ border:`1px solid ${C.line}`, borderRadius:12, padding:"16px 18px" }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12 }}>
+                  <div style={{ width:9, height:9, borderRadius:99, background:b.c }} />
+                  <span style={{ fontWeight:700, fontSize:14.5 }}>Cabang {b.n}</span>
+                </div>
+                <RowLine l="Pendapatan" v={b.r} c={C.pos} />
+                <RowLine l="Biaya operasional" v={b.o} c={C.neg} />
+                <div style={{ borderTop:`1px solid ${C.line}`, marginTop:6, paddingTop:8 }}>
+                  <RowLine l="Kontribusi laba" v={b.k} bold />
+                </div>
+                <div style={{ marginTop:10, padding:"8px 12px", borderRadius:8, background:b.c+"10", fontSize:12 }}>
+                  Efisiensi: <b>{pct(eff)}</b> laba per rupiah pendapatan
+                  {totalKontrib>0 && <> · porsi <b>{pct(b.k/totalKontrib)}</b> dari total</>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+const RowLine = ({ l, v, c, bold }) => (
+  <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, padding:"5px 0" }}>
+    <span style={{ color:bold?C.ink:C.sub, fontWeight:bold?600:400 }}>{l}</span>
+    <span className="mono" style={{ fontWeight:bold?700:600, color:c||C.ink }}>{money(v)}</span>
+  </div>
+);
+
+// ============================================================
+// CASH FLOW
+// ============================================================
+function CashFlow({ flow, detail }) {
+  const bankSum = flow.filter(f=>f.code==="1-10002"||f.code==="1-10001");
+  const kasSum = flow.filter(f=>f.code==="1-10007");
+  const bankDetail = detail.filter(d=>d.code==="1-10002"||d.code==="1-10001");
+  const kasDetail = detail.filter(d=>d.code==="1-10007");
+
+  const Block=({title,sumRows,rows,tone})=>{
+    const totIn = sumRows.reduce((s,f)=>s+Number(f.masuk),0);
+    const totOut = sumRows.reduce((s,f)=>s+Number(f.keluar),0);
+    return (
+      <div className="card" style={{ overflow:"hidden", marginBottom:16 }}>
+        <div style={{ padding:"11px 20px", background:tone+"15", fontWeight:700, color:C.deep, fontSize:13,
+          display:"flex", justifyContent:"space-between" }}>
+          <span>{title}</span>
+          <span className="mono" style={{ fontWeight:700 }}>Net {money(totIn-totOut)}</span>
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"90px 1fr 130px 130px", padding:"9px 20px",
+          fontSize:11.5, color:C.sub, fontWeight:600, borderBottom:`1px solid ${C.line}` }}>
+          <span>TANGGAL</span><span>KETERANGAN</span>
+          <span style={{ textAlign:"right" }}>MASUK</span><span style={{ textAlign:"right" }}>KELUAR</span></div>
+        {rows.length ? rows.map((d,i)=>(
+          <div key={d.entry_id+i} style={{ display:"grid", gridTemplateColumns:"90px 1fr 130px 130px",
+            padding:"9px 20px", borderBottom:`1px solid ${C.line}`, fontSize:12.5, alignItems:"center" }}>
+            <span style={{ color:C.sub }}>{d.entry_date}</span>
+            <span>{d.memo}
+              {d.cash_source && <span style={{ fontSize:9.5, fontWeight:700, padding:"1px 6px", marginLeft:6,
+                borderRadius:20, background:d.cash_source==="kas"?C.kas+"18":C.teal+"15",
+                color:d.cash_source==="kas"?C.kas:C.teal }}>{d.cash_source==="kas"?"KAS":"BANK"}</span>}</span>
+            <span className="mono" style={{ textAlign:"right", color:Number(d.masuk)?C.pos:C.line }}>
+              {Number(d.masuk)?money(d.masuk):"–"}</span>
+            <span className="mono" style={{ textAlign:"right", color:Number(d.keluar)?C.neg:C.line }}>
+              {Number(d.keluar)?money(d.keluar):"–"}</span>
+          </div>
+        )) : <div style={{ padding:"14px 20px", fontSize:12.5, color:C.sub, fontStyle:"italic" }}>Tidak ada mutasi periode ini.</div>}
+        {rows.length>0 && (
+          <div style={{ display:"grid", gridTemplateColumns:"90px 1fr 130px 130px", padding:"11px 20px",
+            background:C.surf, fontWeight:700, fontSize:12.5 }}>
+            <span></span><span>TOTAL</span>
+            <span className="mono" style={{ textAlign:"right", color:C.pos }}>{money(totIn)}</span>
+            <span className="mono" style={{ textAlign:"right", color:C.neg }}>{money(totOut)}</span>
+          </div>
+        )}
+      </div>
+    );
+  };
+  return (
+    <div className="pop">
+      <PageHead eyebrow="Turunan Otomatis" title="Laporan Arus Kas"
+        sub="Rincian tiap mutasi Bank & Kas — tanggal, keterangan, jumlah masuk/keluar" />
+      <Block title="BANK" sumRows={bankSum} rows={bankDetail} tone={C.teal} />
+      <Block title="KAS (PETTY CASH)" sumRows={kasSum} rows={kasDetail} tone={C.kas} />
     </div>
   );
 }
