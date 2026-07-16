@@ -466,13 +466,15 @@ function Transaksi({ accounts, acctByCode, acctById, journal, orgId, onChange })
 
   const bankId = acctByCode["1-10002"]?.id;
   const kasId  = acctByCode["1-10007"]?.id;
+  const hutangAccounts = accounts.filter(a=>a.type==="Kewajiban" && a.is_active!==false);
+  const defaultHutang = acctByCode["2-20001"]?.id || hutangAccounts[0]?.id;
 
   const pilihKategori = (key) => {
     setKat(key);
     const opsi = accounts.filter(a=>a.is_active!==false).filter(KATEGORI[key].filter);
     setForm({
       date: `${YEAR}-07-01`, jumlah: "", cash: "bank",
-      lawan_id: opsi[0]?.id || "", memo: "",
+      lawan_id: opsi[0]?.id || "", memo: "", hutang_id: defaultHutang,
     });
     setFlash("");
   };
@@ -481,20 +483,26 @@ function Transaksi({ accounts, acctByCode, acctById, journal, orgId, onChange })
     const K = KATEGORI[kat];
     const nominal = +form.jumlah || 0;
     if (nominal <= 0 || !form.lawan_id) return;
-    const cashId = form.cash === "bank" ? bankId : kasId;
+    const pakaiHutang = form.cash === "hutang";
+    if (pakaiHutang && !form.hutang_id) { setFlash("✗ Pilih akun hutang dulu"); return; }
+    // akun kas/bank/hutang yang jadi lawan
+    const sumberId = pakaiHutang ? form.hutang_id
+      : (form.cash === "bank" ? bankId : kasId);
     // Susun jurnal debet-kredit otomatis sesuai arah (SAK)
     const lines = K.arah === "masuk"
-      ? [ { account_id: cashId, debit: nominal, credit: 0 },       // uang masuk → Kas/Bank Debet
+      ? [ { account_id: sumberId, debit: nominal, credit: 0 },
           { account_id: form.lawan_id, debit: 0, credit: nominal } ]
       : [ { account_id: form.lawan_id, debit: nominal, credit: 0 }, // beban/beli → akun Debet
-          { account_id: cashId, debit: 0, credit: nominal } ];      // Kas/Bank Kredit
+          { account_id: sumberId, debit: 0, credit: nominal } ];     // Kas/Bank/Hutang Kredit
     const namaLawan = acctById[form.lawan_id]?.name || "";
+    // cash_source: hanya bank/kas yang valid; kalau hutang, catat null (bukan mutasi kas)
+    const cashSource = pakaiHutang ? null : form.cash;
     setBusy(true); setFlash("");
     try {
       await postJournal(orgId, {
         date: form.date,
-        memo: form.memo || `${K.label} — ${namaLawan}`,
-        cash: form.cash,
+        memo: form.memo || `${K.label} — ${namaLawan}${pakaiHutang?" (hutang)":""}`,
+        cash: cashSource,
         lines,
       });
       setFlash("✓ Transaksi tersimpan & jurnal otomatis dibuat");
@@ -595,12 +603,30 @@ function Transaksi({ accounts, acctByCode, acctById, journal, orgId, onChange })
           {opsi.map(a=><option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
         </select>
 
-        <label style={lbl}>{K.arah==="masuk"?"Uang masuk ke":"Uang keluar dari"}</label>
+        <label style={lbl}>{K.arah==="masuk"?"Uang masuk ke":"Uang keluar dari / dibayar via"}</label>
         <select value={form.cash} onChange={e=>setForm({...form,cash:e.target.value})}
-          style={{ ...inp, marginBottom:14, fontWeight:600, color:form.cash==="bank"?C.teal:C.kas }}>
+          style={{ ...inp, marginBottom:14, fontWeight:600,
+            color:form.cash==="bank"?C.teal:form.cash==="kas"?C.kas:C.neg }}>
           <option value="bank">Bank BCA</option>
           <option value="kas">Kas (Petty Cash)</option>
+          {K.arah==="keluar" && hutangAccounts.length>0 &&
+            <option value="hutang">Hutang (belum dibayar)</option>}
         </select>
+
+        {/* pilih akun hutang bila sumber = hutang */}
+        {form.cash==="hutang" && (
+          <div className="pop" style={{ marginBottom:14 }}>
+            <label style={lbl}>Catat sebagai hutang ke akun</label>
+            <select value={form.hutang_id||""} onChange={e=>setForm({...form,hutang_id:e.target.value})}
+              style={{ ...inp, fontWeight:600, color:C.neg }}>
+              {hutangAccounts.map(h=><option key={h.id} value={h.id}>{h.code} · {h.name}</option>)}
+            </select>
+            <div style={{ fontSize:11.5, color:C.sub, marginTop:6, lineHeight:1.5 }}>
+              Beban/pembelian dicatat sekarang, tapi kas belum keluar — kewajiban (hutang) Anda bertambah.
+              Saat nanti membayar, buat transaksi "Bayar Beban" dari Bank/Kas ke akun hutang ini.
+            </div>
+          </div>
+        )}
 
         <label style={lbl}>Keterangan (opsional)</label>
         <input placeholder={`mis. ${K.label} bulan Juli`} value={form.memo}
@@ -610,13 +636,18 @@ function Transaksi({ accounts, acctByCode, acctById, journal, orgId, onChange })
         {nominal>0 && form.lawan_id && (
           <div style={{ background:C.surf, borderRadius:10, padding:"12px 14px", marginBottom:16, fontSize:12.5 }}>
             <div style={{ color:C.sub, fontWeight:600, marginBottom:6, fontSize:11, letterSpacing:".05em" }}>JURNAL OTOMATIS:</div>
-            {K.arah==="masuk" ? <>
-              <Auto d={`${form.cash==="bank"?"Bank BCA":"Kas"}`} v={nominal} side="Debet" />
-              <Auto d={acctById[form.lawan_id]?.name} v={nominal} side="Kredit" />
-            </> : <>
-              <Auto d={acctById[form.lawan_id]?.name} v={nominal} side="Debet" />
-              <Auto d={`${form.cash==="bank"?"Bank BCA":"Kas"}`} v={nominal} side="Kredit" />
-            </>}
+            {(() => {
+              const sumberNama = form.cash==="hutang"
+                ? (acctById[form.hutang_id]?.name || "Hutang")
+                : (form.cash==="bank" ? "Bank BCA" : "Kas");
+              return K.arah==="masuk" ? <>
+                <Auto d={sumberNama} v={nominal} side="Debet" />
+                <Auto d={acctById[form.lawan_id]?.name} v={nominal} side="Kredit" />
+              </> : <>
+                <Auto d={acctById[form.lawan_id]?.name} v={nominal} side="Debet" />
+                <Auto d={sumberNama} v={nominal} side="Kredit" />
+              </>;
+            })()}
           </div>
         )}
 
