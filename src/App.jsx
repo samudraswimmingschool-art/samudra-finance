@@ -5,7 +5,7 @@ import {
   Search, LogOut, RefreshCw, Wallet, ArrowDownCircle, ArrowUpCircle,
   PiggyBank, ShoppingCart, ChevronLeft, Pencil, BarChart3, X,
   TrendingDown, Lightbulb, Printer, ChevronDown, ChevronUp, Banknote,
-  Target as TargetIcon, FileText
+  Target as TargetIcon, FileText, Package
 } from "lucide-react";
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -19,6 +19,8 @@ import {
   updateJournal, getJournalRange, rpcMonthlyTrend, rpcCashFlowDetail,
   addAccount, deleteAccount, setAccountActive, updateAccount, accountUsedCount,
   getTarget, saveTarget, getAchievement,
+  getFixedAssets, addFixedAsset, updateFixedAsset, deleteFixedAsset,
+  rpcAssetDepreciation, postDepreciation,
   rpcPnl, rpcBalanceSheet, rpcRetainedProfit, rpcCashFlow, rpcAccountBalances,
   periodRange, signOut,
 } from "./lib/api";
@@ -191,6 +193,7 @@ export default function App() {
           {tab==="equity"    && <Equity orgId={orgId} period={period} />}
           {tab==="cashflow"  && <CashFlow flow={flow} detail={flowDetail} />}
           {tab==="coa"       && <COAView accounts={accounts} orgId={orgId} onChange={reloadAccounts} />}
+          {tab==="aset"      && <AsetTetap orgId={orgId} acctByCode={acctByCode} accounts={accounts} />}
           </div>
         </main>
       </div>
@@ -214,6 +217,7 @@ const NAV = [
   { id:"equity", label:"Perubahan Modal", icon:TrendingUp },
   { id:"cashflow", label:"Arus Kas", icon:ArrowLeftRight },
   { sec:"DATA" },
+  { id:"aset", label:"Aset Tetap", icon:Package },
   { id:"coa", label:"Chart of Account", icon:Building2 },
 ];
 const SHOW_PERIOD = ["dashboard","transaksi","journal","analisis","ledger","trial","pnl","balance","equity","cashflow"];
@@ -1731,6 +1735,188 @@ const ORow = ({ l, v, c }) => (
     <span className="mono" style={{ textAlign:"right", fontWeight:600, color:c||C.ink }}>{money(v)}</span>
   </div>
 );
+
+// ============================================================
+// ASET TETAP & PENYUSUTAN (garis lurus, sesuai SAK EMKM)
+// ============================================================
+function AsetTetap({ orgId, acctByCode, accounts }) {
+  const [rows, setRows] = useState([]);
+  const [showForm, setShowForm] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState("");
+  const asOf = `${YEAR}-${String(new Date().getMonth()+1).padStart(2,"0")}-28`;
+  const blank = () => ({ name:"", category:"Peralatan", acquire_date:`${YEAR}-01-01`,
+    cost:"", residual:"", useful_life_years:"5", account_asset:"1-10705" });
+  const [form, setForm] = useState(blank());
+
+  const reload = async () => {
+    try { setRows(await rpcAssetDepreciation(orgId, asOf)); }
+    catch(e){ setFlash("✗ "+e.message); }
+  };
+  useEffect(()=>{ if(orgId) reload(); /* eslint-disable-next-line */ }, [orgId]);
+
+  const simpan = async () => {
+    if (!form.name || !form.cost) { setFlash("✗ Nama & harga wajib diisi"); return; }
+    setBusy(true); setFlash("");
+    try {
+      const payload = {
+        name: form.name, category: form.category, acquire_date: form.acquire_date,
+        cost: +form.cost||0, residual: +form.residual||0,
+        useful_life_years: +form.useful_life_years||1, account_asset: form.account_asset,
+      };
+      if (editId) { await updateFixedAsset(editId, payload); setFlash("✓ Aset diperbarui"); }
+      else { await addFixedAsset(orgId, payload); setFlash("✓ Aset ditambahkan"); }
+      setForm(blank()); setShowForm(false); setEditId(null);
+      reload();
+    } catch(e){ setFlash("✗ "+e.message); }
+    finally { setBusy(false); }
+  };
+
+  const startEdit = (a) => {
+    setEditId(a.id); setShowForm(true);
+    setForm({ name:a.name, category:a.category||"Peralatan", acquire_date:a.acquire_date,
+      cost:String(Math.round(a.cost)), residual:String(Math.round(a.residual)),
+      useful_life_years:String(a.useful_life_years), account_asset:"1-10705" });
+    window.scrollTo({ top:0, behavior:"smooth" });
+  };
+  const hapus = async (a) => {
+    if (!confirm(`Hapus aset "${a.name}"?`)) return;
+    try { await deleteFixedAsset(a.id); reload(); } catch(e){ alert(e.message); }
+  };
+
+  const postingBulanIni = async (a) => {
+    const now = new Date();
+    const y = YEAR, m = now.getMonth()+1;
+    if (!confirm(`Posting penyusutan ${a.name} untuk ${m}/${y} sebesar ${money(a.depr_per_month)}?`)) return;
+    setBusy(true); setFlash("");
+    try {
+      await postDepreciation(orgId, a, y, m, Number(a.depr_per_month), acctByCode);
+      setFlash(`✓ Penyusutan ${a.name} bulan ${m}/${y} diposting ke jurnal`);
+      reload();
+    } catch(e){
+      setFlash("✗ " + (e.message.includes("duplicate")?"Penyusutan bulan ini sudah diposting":e.message));
+    }
+    finally { setBusy(false); }
+  };
+
+  const totalCost = rows.reduce((s,a)=>s+Number(a.cost),0);
+  const totalAkum = rows.reduce((s,a)=>s+Number(a.accumulated),0);
+  const totalBuku = rows.reduce((s,a)=>s+Number(a.book_value),0);
+
+  return (
+    <div className="pop">
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+        <PageHead eyebrow="Master Data" title="Aset Tetap & Penyusutan"
+          sub="Metode garis lurus — penyusutan per bulan otomatis dihitung" />
+        <button className="btn no-print" onClick={()=>{ setShowForm(!showForm); setEditId(null); setForm(blank()); setFlash(""); }}
+          style={{ display:"flex", alignItems:"center", gap:6, background:showForm?C.surf:C.teal,
+            color:showForm?C.sub:"#fff", padding:"9px 16px", borderRadius:9, fontSize:13, fontWeight:600, marginTop:4 }}>
+          {showForm ? <><X size={15}/> Tutup</> : <><Plus size={15}/> Tambah Aset</>}
+        </button>
+      </div>
+
+      {showForm && (
+        <div className="card pop" style={{ padding:20, marginBottom:16, border:`2px solid ${editId?C.brass:C.teal}` }}>
+          {editId && <div style={{ marginBottom:12, fontSize:13, fontWeight:600, color:C.brass }}>
+            <Pencil size={14} style={{ verticalAlign:"-2px", marginRight:6 }} />Edit aset</div>}
+          <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr", gap:12, marginBottom:12 }}>
+            <div><label style={lbl}>Nama Aset</label>
+              <input placeholder="mis. Alat Latihan Renang" value={form.name}
+                onChange={e=>setForm({...form,name:e.target.value})} style={inp} /></div>
+            <div><label style={lbl}>Kategori</label>
+              <input placeholder="mis. Peralatan" value={form.category}
+                onChange={e=>setForm({...form,category:e.target.value})} style={inp} /></div>
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:12, marginBottom:14 }}>
+            <div><label style={lbl}>Tanggal Beli</label>
+              <input type="date" value={form.acquire_date}
+                onChange={e=>setForm({...form,acquire_date:e.target.value})} style={inp} /></div>
+            <div><label style={lbl}>Harga Beli (Rp)</label>
+              <input className="mono" inputMode="numeric" placeholder="10000000" value={form.cost}
+                onChange={e=>setForm({...form,cost:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
+            <div><label style={lbl}>Nilai Residu (Rp)</label>
+              <input className="mono" inputMode="numeric" placeholder="0" value={form.residual}
+                onChange={e=>setForm({...form,residual:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
+            <div><label style={lbl}>Umur (tahun)</label>
+              <input className="mono" inputMode="numeric" placeholder="5" value={form.useful_life_years}
+                onChange={e=>setForm({...form,useful_life_years:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
+          </div>
+          <div style={{ fontSize:11.5, color:C.sub, marginBottom:12, lineHeight:1.5, background:C.surf, padding:"10px 12px", borderRadius:8 }}>
+            <b>Nilai Residu</b> = perkiraan nilai jual aset di akhir masa manfaat (isi 0 kalau tidak ada).
+            Penyusutan/bulan = (Harga − Residu) ÷ (Umur × 12).
+            {form.cost && form.useful_life_years && <span style={{ color:C.teal, fontWeight:600 }}>
+              {" "}→ Estimasi: {money(((+form.cost||0)-(+form.residual||0))/((+form.useful_life_years||1)*12))}/bulan</span>}
+          </div>
+          <button className="btn" onClick={simpan} disabled={busy||!form.name||!form.cost}
+            style={{ width:"100%", padding:"11px", borderRadius:9,
+              background:(form.name&&form.cost&&!busy)?(editId?C.brass:C.teal):C.line, color:"#fff", fontWeight:700, fontSize:14 }}>
+            {busy?"Menyimpan…":(editId?"Simpan Perubahan":"Simpan Aset")}</button>
+        </div>
+      )}
+      {flash && <div className="pop" style={{ textAlign:"center", marginBottom:14,
+        color:flash.startsWith("✓")?C.pos:C.neg, fontSize:13, fontWeight:600 }}>{flash}</div>}
+
+      {/* ringkasan */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:14, marginBottom:16 }}>
+        <div className="card" style={{ padding:"16px 18px" }}>
+          <div style={{ fontSize:12.5, color:C.sub }}>Total Harga Perolehan</div>
+          <div className="mono" style={{ fontSize:19, fontWeight:700, marginTop:6 }}>{money(totalCost)}</div></div>
+        <div className="card" style={{ padding:"16px 18px" }}>
+          <div style={{ fontSize:12.5, color:C.sub }}>Akumulasi Penyusutan</div>
+          <div className="mono" style={{ fontSize:19, fontWeight:700, marginTop:6, color:C.neg }}>{money(totalAkum)}</div></div>
+        <div className="card" style={{ padding:"16px 18px" }}>
+          <div style={{ fontSize:12.5, color:C.sub }}>Nilai Buku (Sisa)</div>
+          <div className="mono" style={{ fontSize:19, fontWeight:700, marginTop:6, color:C.teal }}>{money(totalBuku)}</div></div>
+      </div>
+
+      {/* daftar aset */}
+      <div className="card" style={{ overflow:"hidden" }}>
+        <div style={{ display:"grid", gridTemplateColumns:"1.6fr 110px 110px 90px 110px 110px 130px", padding:"11px 18px",
+          background:C.deep, color:"#DDECEC", fontSize:11.5, fontWeight:600 }}>
+          <span>NAMA ASET</span>
+          <span style={{ textAlign:"right" }}>HARGA</span>
+          <span style={{ textAlign:"right" }}>SUSUT/BLN</span>
+          <span style={{ textAlign:"center" }}>BULAN</span>
+          <span style={{ textAlign:"right" }}>AKUMULASI</span>
+          <span style={{ textAlign:"right" }}>NILAI BUKU</span>
+          <span style={{ textAlign:"right" }}>AKSI</span></div>
+        {rows.length===0 && <div style={{ padding:"20px 18px", color:C.sub, fontSize:13 }}>Belum ada aset. Klik "Tambah Aset" untuk mulai.</div>}
+        {rows.map(a=>{
+          const lunas = Number(a.book_value) <= Number(a.residual);
+          return (
+            <div key={a.id} style={{ display:"grid", gridTemplateColumns:"1.6fr 110px 110px 90px 110px 110px 130px",
+              padding:"11px 18px", borderBottom:`1px solid ${C.line}`, fontSize:12.5, alignItems:"center" }}>
+              <span><b style={{ color:C.deep }}>{a.name}</b>
+                {a.category && <span style={{ fontSize:10.5, color:C.sub }}> · {a.category}</span>}
+                <div style={{ fontSize:10.5, color:C.sub }}>Beli: {a.acquire_date} · umur {a.useful_life_years}th</div></span>
+              <span className="mono" style={{ textAlign:"right" }}>{money(Number(a.cost))}</span>
+              <span className="mono" style={{ textAlign:"right", color:C.sub }}>{money(Number(a.depr_per_month))}</span>
+              <span style={{ textAlign:"center", color:C.sub }}>{a.months_elapsed}/{a.useful_life_years*12}</span>
+              <span className="mono" style={{ textAlign:"right", color:C.neg }}>{money(Number(a.accumulated))}</span>
+              <span className="mono" style={{ textAlign:"right", fontWeight:700, color:lunas?C.sub:C.teal }}>{money(Number(a.book_value))}</span>
+              <span className="no-print" style={{ display:"flex", gap:6, justifyContent:"flex-end", alignItems:"center" }}>
+                {!lunas && <button className="btn" onClick={()=>postingBulanIni(a)} disabled={busy} title="Posting penyusutan bulan ini"
+                  style={{ background:C.teal+"15", color:C.teal, fontSize:10.5, fontWeight:700, padding:"4px 8px", borderRadius:6 }}>
+                  POSTING</button>}
+                <button className="btn" onClick={()=>startEdit(a)} title="Edit"
+                  style={{ background:"transparent", color:C.sub }}><Pencil size={13} /></button>
+                <button className="btn" onClick={()=>hapus(a)} title="Hapus"
+                  style={{ background:"transparent", color:C.sub }}><Trash2 size={13} /></button>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ fontSize:11.5, color:C.sub, marginTop:12, lineHeight:1.6 }}>
+        <b>Cara kerja (garis lurus, SAK EMKM):</b> tiap bulan aset menyusut sebesar (Harga − Residu) ÷ (Umur × 12).
+        Klik <b>POSTING</b> untuk mencatat beban penyusutan bulan berjalan ke jurnal (Debet "Beban Penyusutan",
+        Kredit "Akumulasi Penyusutan"). Akumulasi mengurangi nilai aset di Neraca, dan beban muncul di Laba Rugi.
+        Kolom "Bulan" menunjukkan berapa bulan sudah berjalan dari total masa manfaat.
+      </div>
+    </div>
+  );
+}
 
 // ============================================================
 // CHART OF ACCOUNT

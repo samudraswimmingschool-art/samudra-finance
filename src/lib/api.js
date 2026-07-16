@@ -274,6 +274,88 @@ export async function getAchievement(orgId, year) {
   return data?.[0] || { pendapatan: 0, laba: 0, transaksi: 0 };
 }
 
+// ---- Aset Tetap & Penyusutan ----
+export async function getFixedAssets(orgId) {
+  const { data, error } = await supabase
+    .from("fixed_assets")
+    .select("*")
+    .eq("org_id", orgId)
+    .order("acquire_date");
+  if (error) throw error;
+  return data;
+}
+
+export async function addFixedAsset(orgId, a) {
+  const { data, error } = await supabase.from("fixed_assets").insert({
+    org_id: orgId,
+    name: a.name,
+    category: a.category || null,
+    acquire_date: a.acquire_date,
+    cost: a.cost || 0,
+    residual: a.residual || 0,
+    useful_life_years: a.useful_life_years || 1,
+    account_asset: a.account_asset || null,
+    is_active: true,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateFixedAsset(assetId, a) {
+  const { error } = await supabase.from("fixed_assets").update({
+    name: a.name,
+    category: a.category || null,
+    acquire_date: a.acquire_date,
+    cost: a.cost || 0,
+    residual: a.residual || 0,
+    useful_life_years: a.useful_life_years || 1,
+  }).eq("id", assetId);
+  if (error) throw error;
+}
+
+export async function deleteFixedAsset(assetId) {
+  const { error } = await supabase.from("fixed_assets").delete().eq("id", assetId);
+  if (error) throw error;
+}
+
+export async function rpcAssetDepreciation(orgId, asOf) {
+  const { data, error } = await supabase.rpc("asset_depreciation", { p_org: orgId, p_as_of: asOf });
+  if (error) throw error;
+  return data;
+}
+
+// Posting penyusutan sebulan untuk satu aset:
+// buat jurnal (Debet Beban Penyusutan, Kredit Akumulasi Penyusutan)
+// lalu catat di depreciation_postings agar tidak dobel.
+export async function postDepreciation(orgId, asset, year, month, amount, acctByCode) {
+  const bebanId = acctByCode["6-60900"]?.id;
+  const akumId = acctByCode["1-10800"]?.id;
+  if (!bebanId || !akumId) throw new Error("Akun penyusutan belum ada. Jalankan SQL aset_penyusutan.sql dulu.");
+  const dateStr = `${year}-${String(month).padStart(2,"0")}-28`;
+  // buat jurnal
+  const { data: je, error: eh } = await supabase.from("journal_entries").insert({
+    org_id: orgId,
+    entry_date: dateStr,
+    memo: `Penyusutan ${asset.name} — ${month}/${year}`,
+    cash_source: null,
+    kind: "general",
+  }).select().single();
+  if (eh) throw eh;
+  const { error: el } = await supabase.from("journal_lines").insert([
+    { entry_id: je.id, account_id: bebanId, debit: amount, credit: 0 },
+    { entry_id: je.id, account_id: akumId, debit: 0, credit: amount },
+  ]);
+  if (el) throw el;
+  // catat posting
+  const { error: ep } = await supabase.from("depreciation_postings").insert({
+    org_id: orgId, asset_id: asset.id,
+    period_year: year, period_month: month,
+    amount, entry_id: je.id,
+  });
+  if (ep) throw ep;
+  return true;
+}
+
 // ---- Auth ----
 export async function signIn(email, password) {
   const { error } = await supabase.auth.signInWithPassword({ email, password });
