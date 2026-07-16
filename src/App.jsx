@@ -495,8 +495,8 @@ function Transaksi({ accounts, acctByCode, acctById, journal, orgId, onChange })
       : [ { account_id: form.lawan_id, debit: nominal, credit: 0 }, // beban/beli → akun Debet
           { account_id: sumberId, debit: 0, credit: nominal } ];     // Kas/Bank/Hutang Kredit
     const namaLawan = acctById[form.lawan_id]?.name || "";
-    // cash_source: hanya bank/kas yang valid; kalau hutang, catat null (bukan mutasi kas)
-    const cashSource = pakaiHutang ? null : form.cash;
+    // cash_source: bank/kas/hutang untuk penanda di riwayat
+    const cashSource = pakaiHutang ? "hutang" : form.cash;
     setBusy(true); setFlash("");
     try {
       await postJournal(orgId, {
@@ -544,15 +544,17 @@ function Transaksi({ accounts, acctByCode, acctById, journal, orgId, onChange })
           {journal.length===0 && <div style={{ padding:"18px", color:C.sub, fontSize:13 }}>Belum ada transaksi periode ini.</div>}
           {journal.slice(0,8).map(e=>{
             const t = e.journal_lines.reduce((s,l)=>s+(Number(l.debit)||0),0);
-            const isKas = e.cash_source==="kas";
+            const src = e.cash_source;
+            const badgeTone = src==="kas"?C.kas:src==="hutang"?C.neg:C.teal;
+            const badgeText = src==="kas"?"KAS":src==="hutang"?"HUTANG":"BANK";
             return (
               <div key={e.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
                 padding:"12px 18px", borderBottom:`1px solid ${C.line}` }}>
                 <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                   <span style={{ fontWeight:600, fontSize:13.5 }}>{e.memo}</span>
-                  {e.cash_source && <span style={{ fontSize:10.5, fontWeight:700, padding:"2px 7px",
-                    borderRadius:20, background:isKas?C.kas+"18":C.teal+"15", color:isKas?C.kas:C.teal }}>
-                    {isKas?"KAS":"BANK"}</span>}
+                  {src && <span style={{ fontSize:10.5, fontWeight:700, padding:"2px 7px",
+                    borderRadius:20, background:badgeTone+"18", color:badgeTone }}>
+                    {badgeText}</span>}
                 </div>
                 <div style={{ display:"flex", gap:14, alignItems:"center" }}>
                   <span style={{ fontSize:12, color:C.sub }}>{e.entry_date}</span>
@@ -774,10 +776,12 @@ function Journal({ accounts, acctById, acctByCode, journal, orgId, onChange }) {
           <div style={{ flex:1 }}><label style={lbl}>Keterangan</label>
             <input placeholder="mis. Gaji Pelatih Private — Juli" value={draft.memo}
               onChange={e=>setDraft({...draft,memo:e.target.value})} style={inp} /></div>
-          <div style={{ flex:"0 0 160px" }}><label style={lbl}>Sumber Kas</label>
+          <div style={{ flex:"0 0 160px" }}><label style={lbl}>Sumber / Penanda</label>
             <select value={draft.cash} onChange={e=>setDraft({...draft,cash:e.target.value})}
-              style={{ ...inp, fontWeight:600, color:draft.cash==="bank"?C.teal:C.kas }}>
-              <option value="bank">Bank BCA</option><option value="kas">Kas (Petty Cash)</option></select></div>
+              style={{ ...inp, fontWeight:600, color:draft.cash==="bank"?C.teal:draft.cash==="kas"?C.kas:C.neg }}>
+              <option value="bank">Bank BCA</option>
+              <option value="kas">Kas (Petty Cash)</option>
+              <option value="hutang">Hutang</option></select></div>
         </div>
 
         <div style={{ display:"grid", gridTemplateColumns:"1fr 150px 150px 34px", gap:8,
@@ -837,16 +841,18 @@ function Journal({ accounts, acctById, acctByCode, journal, orgId, onChange }) {
         {shown.length===0 && <div style={{ padding:"20px 18px", color:C.sub, fontSize:13 }}>Tidak ada jurnal pada rentang ini.</div>}
         {shown.map(e=>{
           const t = e.journal_lines.reduce((s,l)=>s+(Number(l.debit)||0),0);
-          const isKas = e.cash_source==="kas";
+          const src = e.cash_source; // "bank" | "kas" | "hutang" | null
+          const badgeTone = src==="kas"?C.kas:src==="hutang"?C.neg:C.teal;
+          const badgeText = src==="kas"?"KAS":src==="hutang"?"HUTANG":"BANK";
           return (
             <div key={e.id} style={{ padding:"13px 18px", borderBottom:`1px solid ${C.line}`,
               background: editId===e.id ? C.brass+"08" : "transparent" }}>
               <div style={{ display:"flex", justifyContent:"space-between", marginBottom:7 }}>
                 <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                   <span style={{ fontWeight:600, fontSize:13.5 }}>{e.memo}</span>
-                  {e.cash_source && <span style={{ fontSize:10.5, fontWeight:700, padding:"2px 7px",
-                    borderRadius:20, background:isKas?C.kas+"18":C.teal+"15", color:isKas?C.kas:C.teal }}>
-                    {isKas?"KAS":"BANK"}</span>}
+                  {src && <span style={{ fontSize:10.5, fontWeight:700, padding:"2px 7px",
+                    borderRadius:20, background:badgeTone+"18", color:badgeTone }}>
+                    {badgeText}</span>}
                   {e.kind!=="general" && <span style={{ fontSize:10.5, fontWeight:700, padding:"2px 7px",
                     borderRadius:20, background:C.brass+"20", color:C.brass }}>{e.kind.toUpperCase()}</span>}
                 </div>
