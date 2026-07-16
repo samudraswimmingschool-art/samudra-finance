@@ -1890,7 +1890,7 @@ function AsetTetap({ orgId, acctByCode, accounts }) {
 
       {/* daftar aset */}
       <div className="card" style={{ overflow:"hidden" }}>
-        <div style={{ display:"grid", gridTemplateColumns:"1.6fr 110px 110px 90px 110px 110px 130px", padding:"11px 18px",
+        <div style={{ display:"grid", gridTemplateColumns:"1.5fr 105px 95px 70px 105px 110px 160px", padding:"11px 18px",
           background:C.deep, color:"#DDECEC", fontSize:11.5, fontWeight:600 }}>
           <span>NAMA ASET</span>
           <span style={{ textAlign:"right" }}>HARGA</span>
@@ -1907,7 +1907,7 @@ function AsetTetap({ orgId, acctByCode, accounts }) {
           const tertunggak = seharusnya - posted;   // yang belum diposting
           const adaTertunggak = tertunggak > 0.5;
           return (
-            <div key={a.id} style={{ display:"grid", gridTemplateColumns:"1.6fr 110px 110px 90px 110px 110px 130px",
+            <div key={a.id} style={{ display:"grid", gridTemplateColumns:"1.5fr 105px 95px 70px 105px 110px 160px",
               padding:"11px 18px", borderBottom:`1px solid ${C.line}`, fontSize:12.5, alignItems:"center" }}>
               <span><b style={{ color:C.deep }}>{a.name}</b>
                 {a.category && <span style={{ fontSize:10.5, color:C.sub }}> · {a.category}</span>}
@@ -1920,16 +1920,16 @@ function AsetTetap({ orgId, acctByCode, accounts }) {
               <span style={{ textAlign:"center", color:C.sub }}>{a.months_elapsed}/{a.useful_life_years*12}</span>
               <span className="mono" style={{ textAlign:"right", color:C.neg }}>{money(Number(a.accumulated))}</span>
               <span className="mono" style={{ textAlign:"right", fontWeight:700, color:lunas?C.sub:C.teal }}>{money(Number(a.book_value))}</span>
-              <span className="no-print" style={{ display:"flex", gap:6, justifyContent:"flex-end", alignItems:"center" }}>
+              <span className="no-print" style={{ display:"flex", gap:5, justifyContent:"flex-end", alignItems:"center", paddingLeft:8 }}>
                 {adaTertunggak && <button className="btn" onClick={()=>postingSemua(a)} disabled={busy} title="Posting semua bulan tertunggak"
-                  style={{ background:C.teal+"15", color:C.teal, fontSize:10.5, fontWeight:700, padding:"4px 8px", borderRadius:6 }}>
+                  style={{ background:C.teal, color:"#fff", fontSize:10, fontWeight:700, padding:"5px 9px", borderRadius:6, whiteSpace:"nowrap" }}>
                   POSTING</button>}
                 <button className="btn" onClick={()=>bukaJadwal(a)} title="Lihat jadwal per bulan"
-                  style={{ background:"transparent", color:C.sub }} disabled={busy}><FileText size={13} /></button>
+                  style={{ background:"transparent", color:C.sub, display:"grid", placeItems:"center", padding:2 }} disabled={busy}><FileText size={14} /></button>
                 <button className="btn" onClick={()=>startEdit(a)} title="Edit"
-                  style={{ background:"transparent", color:C.sub }}><Pencil size={13} /></button>
+                  style={{ background:"transparent", color:C.sub, display:"grid", placeItems:"center", padding:2 }}><Pencil size={14} /></button>
                 <button className="btn" onClick={()=>hapus(a)} title="Hapus"
-                  style={{ background:"transparent", color:C.sub }}><Trash2 size={13} /></button>
+                  style={{ background:"transparent", color:C.sub, display:"grid", placeItems:"center", padding:2 }}><Trash2 size={14} /></button>
               </span>
             </div>
           );
