@@ -255,6 +255,25 @@ export async function rpcCashFlow(orgId, start, end) {
   return data;
 }
 
+// ---- Target & pencapaian ----
+export async function getTarget(orgId, year) {
+  const { data, error } = await supabase.rpc("get_target", { p_org: orgId, p_year: year });
+  if (error) throw error;
+  return data?.[0] || null;
+}
+export async function saveTarget(orgId, year, t) {
+  const { error } = await supabase.rpc("save_target", {
+    p_org: orgId, p_year: year,
+    p_pendapatan: t.pendapatan || 0, p_laba: t.laba || 0, p_transaksi: t.transaksi || 0,
+  });
+  if (error) throw error;
+}
+export async function getAchievement(orgId, year) {
+  const { data, error } = await supabase.rpc("achievement", { p_org: orgId, p_year: year });
+  if (error) throw error;
+  return data?.[0] || { pendapatan: 0, laba: 0, transaksi: 0 };
+}
+
 // ---- Auth ----
 export async function signIn(email, password) {
   const { error } = await supabase.auth.signInWithPassword({ email, password });

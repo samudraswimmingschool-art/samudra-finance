@@ -4,7 +4,8 @@ import {
   TrendingUp, ArrowLeftRight, Building2, Plus, Trash2, Check, AlertCircle,
   Search, LogOut, RefreshCw, Wallet, ArrowDownCircle, ArrowUpCircle,
   PiggyBank, ShoppingCart, ChevronLeft, Pencil, BarChart3, X,
-  TrendingDown, Lightbulb, Printer, ChevronDown, ChevronUp, Banknote
+  TrendingDown, Lightbulb, Printer, ChevronDown, ChevronUp, Banknote,
+  Target as TargetIcon, FileText
 } from "lucide-react";
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -17,6 +18,7 @@ import {
   getMyProfile, getAccounts, getJournal, postJournal, deleteJournal,
   updateJournal, getJournalRange, rpcMonthlyTrend, rpcCashFlowDetail,
   addAccount, deleteAccount, setAccountActive, updateAccount, accountUsedCount,
+  getTarget, saveTarget, getAchievement,
   rpcPnl, rpcBalanceSheet, rpcRetainedProfit, rpcCashFlow, rpcAccountBalances,
   periodRange, signOut,
 } from "./lib/api";
@@ -180,6 +182,8 @@ export default function App() {
           {tab==="journal"   && <Journal accounts={accounts} acctById={acctById} acctByCode={acctByCode}
                                           journal={journal} orgId={orgId} onChange={load} />}
           {tab==="analisis"  && <Analisis pnl={pnl} balances={balances} trend={trend} />}
+          {tab==="owner"     && <OwnerReport orgId={orgId} orgName={orgName} />}
+          {tab==="target"    && <TargetView orgId={orgId} />}
           {tab==="ledger"    && <Ledger balances={balances} />}
           {tab==="trial"     && <Trial balances={balances} />}
           {tab==="pnl"       && <PnL pnl={pnl} period={period} />}
@@ -200,6 +204,8 @@ const NAV = [
   { id:"transaksi", label:"Transaksi", icon:Wallet },
   { id:"journal", label:"Jurnal Umum", icon:BookOpen },
   { sec:"LAPORAN" },
+  { id:"owner", label:"Laporan Owner", icon:FileText },
+  { id:"target", label:"Target", icon:TargetIcon },
   { id:"analisis", label:"Analisis Keuangan", icon:BarChart3 },
   { id:"ledger", label:"Buku Besar", icon:Layers },
   { id:"trial", label:"Neraca Saldo", icon:Scale },
@@ -211,7 +217,6 @@ const NAV = [
   { id:"coa", label:"Chart of Account", icon:Building2 },
 ];
 const SHOW_PERIOD = ["dashboard","transaksi","journal","analisis","ledger","trial","pnl","balance","equity","cashflow"];
-
 function periodBtn(active, small) {
   return { padding: small?"6px 10px":"6px 14px", borderRadius:8, fontSize:12.5, fontWeight:600,
     background: active ? (small?C.teal:C.deep) : "#fff",
@@ -1370,6 +1375,325 @@ function CashFlow({ flow, detail }) {
     </div>
   );
 }
+
+// ============================================================
+// TARGET — set tahunan, auto-bagi bulanan/mingguan, analisis pencapaian
+// ============================================================
+function TargetView({ orgId }) {
+  const [target, setTarget] = useState(null);
+  const [ach, setAch] = useState({ pendapatan:0, laba:0, transaksi:0 });
+  const [form, setForm] = useState({ pendapatan:"", laba:"", transaksi:"" });
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState("");
+  const [edit, setEdit] = useState(false);
+
+  const reload = async () => {
+    const t = await getTarget(orgId, YEAR);
+    setTarget(t);
+    setForm({
+      pendapatan: t? String(Math.round(t.target_pendapatan)) : "",
+      laba: t? String(Math.round(t.target_laba)) : "",
+      transaksi: t? String(t.target_transaksi) : "",
+    });
+    setAch(await getAchievement(orgId, YEAR));
+  };
+  useEffect(()=>{ if(orgId) reload(); /* eslint-disable-next-line */ }, [orgId]);
+
+  const simpan = async () => {
+    setBusy(true); setFlash("");
+    try {
+      await saveTarget(orgId, YEAR, {
+        pendapatan:+form.pendapatan||0, laba:+form.laba||0, transaksi:+form.transaksi||0,
+      });
+      setFlash("✓ Target tersimpan"); setEdit(false); await reload();
+    } catch(e){ setFlash("✗ "+e.message); }
+    finally { setBusy(false); }
+  };
+
+  if (target===null && !edit) {
+    return (
+      <div className="pop">
+        <PageHead eyebrow="Perencanaan" title="Target" sub={`Belum ada target ${YEAR}`} />
+        <div className="card" style={{ padding:30, textAlign:"center" }}>
+          <TargetIcon size={40} color={C.brass} style={{ marginBottom:12 }} />
+          <div style={{ fontSize:15, fontWeight:600, marginBottom:6 }}>Belum ada target tahun {YEAR}</div>
+          <div style={{ fontSize:13, color:C.sub, marginBottom:18 }}>Set target tahunan, sistem otomatis membaginya ke bulanan & mingguan.</div>
+          <button className="btn" onClick={()=>setEdit(true)}
+            style={{ background:C.teal, color:"#fff", padding:"11px 22px", borderRadius:9, fontWeight:700, fontSize:14 }}>
+            Set Target {YEAR}</button>
+        </div>
+      </div>
+    );
+  }
+
+  const tP=target?Number(target.target_pendapatan):0, tL=target?Number(target.target_laba):0, tT=target?Number(target.target_transaksi):0;
+  const now = new Date();
+  const bulanBerjalan = now.getFullYear()===YEAR ? now.getMonth()+1 : 12; // brp bulan sudah lewat
+  const mingguBerjalan = Math.max(1, Math.ceil(bulanBerjalan/12*52));
+
+  const Metric = ({ label, tahunan, aktual, isMoney, icon:Icon, tone }) => {
+    const prog = tahunan ? aktual/tahunan : 0;
+    const bulanan = tahunan/12, mingguan = tahunan/52;
+    const fmt = (v)=> isMoney ? money(v) : Math.round(v).toLocaleString("id-ID");
+    // proyeksi & kekurangan
+    const targetSampaiKini = bulanan*bulanBerjalan;
+    const selisih = aktual - targetSampaiKini;
+    const onTrack = selisih >= 0;
+    const sisa = Math.max(0, tahunan - aktual);
+    const bulanSisa = Math.max(1, 12 - bulanBerjalan);
+    const butuhPerBulan = sisa / bulanSisa;
+    return (
+      <div className="card" style={{ padding:"18px 20px" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
+          <div style={{ width:36, height:36, borderRadius:9, background:tone+"18", display:"grid", placeItems:"center" }}>
+            <Icon size={19} color={tone} /></div>
+          <div style={{ fontWeight:700, fontSize:15 }}>{label}</div>
+          <span style={{ marginLeft:"auto", fontWeight:700, fontSize:15, color:prog>=1?C.pos:tone }}>{pct(prog)}</span>
+        </div>
+        <div style={{ height:10, borderRadius:99, background:C.surf, overflow:"hidden", marginBottom:12 }}>
+          <div style={{ height:"100%", borderRadius:99, background:prog>=1?C.pos:tone,
+            width:`${Math.min(100, prog*100)}%`, transition:"width .5s" }} /></div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, fontSize:12.5 }}>
+          <Cell2 l="Aktual" v={fmt(aktual)} bold />
+          <Cell2 l="Target tahunan" v={fmt(tahunan)} />
+          <Cell2 l="Target / bulan" v={fmt(bulanan)} />
+          <Cell2 l="Target / minggu" v={fmt(mingguan)} />
+        </div>
+        <div style={{ marginTop:12, padding:"10px 12px", borderRadius:8,
+          background:onTrack?C.pos+"10":C.neg+"0D", fontSize:12, lineHeight:1.5, color:C.ink }}>
+          {onTrack
+            ? <>✓ <b>On track</b> — unggul {fmt(Math.abs(selisih))} dari target sampai bulan ke-{bulanBerjalan}.</>
+            : <>⚠ <b>Di bawah target</b> — kurang {fmt(Math.abs(selisih))}. Butuh <b>{fmt(butuhPerBulan)}/bulan</b> untuk kejar target.</>}
+        </div>
+      </div>
+    );
+  };
+
+  // minimal transaksi untuk capai target pendapatan
+  const rataPerTx = ach.transaksi ? ach.pendapatan/ach.transaksi : 0;
+  const sisaPendapatan = Math.max(0, tP - Number(ach.pendapatan));
+  const minTxLagi = rataPerTx ? Math.ceil(sisaPendapatan/rataPerTx) : null;
+
+  return (
+    <div className="pop">
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+        <PageHead eyebrow="Perencanaan" title={`Target ${YEAR}`}
+          sub="Pencapaian aktual vs target — dibagi otomatis ke bulanan & mingguan" />
+        <div style={{ display:"flex", gap:8, marginTop:4 }}>
+          <button className="btn no-print" onClick={()=>window.print()}
+            style={{ display:"flex", alignItems:"center", gap:6, background:C.deep, color:"#fff",
+              padding:"9px 14px", borderRadius:9, fontSize:12.5, fontWeight:600 }}>
+            <Printer size={14} /> PDF</button>
+          <button className="btn no-print" onClick={()=>setEdit(!edit)}
+            style={{ display:"flex", alignItems:"center", gap:6, background:edit?C.surf:C.brass,
+              color:edit?C.sub:"#fff", padding:"9px 16px", borderRadius:9, fontSize:13, fontWeight:600 }}>
+            {edit? <><X size={15}/> Tutup</> : <><Pencil size={15}/> Ubah Target</>}</button>
+        </div>
+      </div>
+
+      {edit && (
+        <div className="card pop no-print" style={{ padding:20, marginBottom:16, border:`2px solid ${C.brass}` }}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:14 }}>
+            <div><label style={lbl}>Target Pendapatan / tahun</label>
+              <input className="mono" inputMode="numeric" placeholder="mis. 1500000000" value={form.pendapatan}
+                onChange={e=>setForm({...form,pendapatan:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
+            <div><label style={lbl}>Target Laba Bersih / tahun</label>
+              <input className="mono" inputMode="numeric" placeholder="mis. 300000000" value={form.laba}
+                onChange={e=>setForm({...form,laba:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
+            <div><label style={lbl}>Target Jumlah Transaksi / tahun</label>
+              <input className="mono" inputMode="numeric" placeholder="mis. 1200" value={form.transaksi}
+                onChange={e=>setForm({...form,transaksi:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
+          </div>
+          <button className="btn" onClick={simpan} disabled={busy}
+            style={{ width:"100%", padding:"11px", borderRadius:9, background:C.brass, color:"#fff", fontWeight:700, fontSize:14 }}>
+            {busy?"Menyimpan…":"Simpan Target"}</button>
+        </div>
+      )}
+      {flash && <div className="pop" style={{ textAlign:"center", marginBottom:14,
+        color:flash.startsWith("✓")?C.pos:C.neg, fontSize:13, fontWeight:600 }}>{flash}</div>}
+
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))", gap:14, marginBottom:16 }}>
+        <Metric label="Pendapatan (Omzet)" tahunan={tP} aktual={Number(ach.pendapatan)} isMoney icon={ArrowUpCircle} tone={C.teal} />
+        <Metric label="Laba Bersih" tahunan={tL} aktual={Number(ach.laba)} isMoney icon={TrendingUp} tone={C.pos} />
+        <Metric label="Jumlah Transaksi" tahunan={tT} aktual={Number(ach.transaksi)} icon={Wallet} tone={C.brass} />
+      </div>
+
+      {/* Analisis minimal transaksi */}
+      <div className="card" style={{ padding:"18px 20px" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12 }}>
+          <Lightbulb size={18} color={C.brass} />
+          <span style={{ fontWeight:700, fontSize:15 }}>Analisis Pencapaian Target</span>
+        </div>
+        <div style={{ fontSize:13, color:C.ink, lineHeight:1.7 }}>
+          {ach.transaksi>0 ? <>
+            Rata-rata nilai per transaksi Anda saat ini <b>{money(rataPerTx)}</b>.
+            {minTxLagi!==null && sisaPendapatan>0 ? <>
+              {" "}Untuk mencapai target pendapatan {money(tP)}, Anda perlu sekitar <b>{minTxLagi.toLocaleString("id-ID")} transaksi lagi</b>
+              {" "}(kekurangan {money(sisaPendapatan)}).
+            </> : sisaPendapatan<=0 && tP>0 ? <> {" "}🎉 Target pendapatan sudah tercapai!</> : <> {" "}Set target pendapatan untuk melihat kebutuhan transaksi.</>}
+          </> : "Belum ada transaksi tahun ini untuk dianalisis. Input transaksi dulu."}
+        </div>
+      </div>
+    </div>
+  );
+}
+const Cell2 = ({ l, v, bold }) => (
+  <div>
+    <div style={{ fontSize:10.5, color:C.sub }}>{l}</div>
+    <div className="mono" style={{ fontSize:13.5, fontWeight:bold?700:600, color:bold?C.ink:C.sub }}>{v}</div>
+  </div>
+);
+
+// ============================================================
+// LAPORAN OWNER — ringkasan eksekutif + detail lengkap, siap PDF
+// ============================================================
+function OwnerReport({ orgId, orgName }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  useEffect(()=>{ (async()=>{
+    try {
+      const [ , end] = periodRange(YEAR, "all");
+      const start = `${YEAR}-01-01`;
+      const [pnl, sheet, retained, bal, trend, ach, target] = await Promise.all([
+        rpcPnl(orgId, start, end),
+        rpcBalanceSheet(orgId, end),
+        rpcRetainedProfit(orgId, end),
+        rpcAccountBalances(orgId, start, end),
+        rpcMonthlyTrend(orgId, YEAR),
+        getAchievement(orgId, YEAR),
+        getTarget(orgId, YEAR),
+      ]);
+      setData({ pnl, sheet, retained, bal, trend, ach, target });
+    } catch(e){ setErr(e.message); }
+  })(); /* eslint-disable-next-line */ }, [orgId]);
+
+  if (err) return <Center>Gagal memuat: {err}</Center>;
+  if (!data) return <Center>Menyiapkan laporan…</Center>;
+
+  const { pnl, sheet, retained, bal, trend, ach, target } = data;
+  const S=(type,branch)=>pnl.filter(r=>r.type===type&&(!branch||r.branch===branch)).reduce((s,r)=>s+Number(r.amount),0);
+  const rev=S("Pendapatan"), cogs=S("COGS"), opBank=S("Beban Op"), kasBeban=S("Beban Kas"),
+    oi=S("Other Income"), oe=S("Other Expense");
+  const totalBeban=cogs+opBank+kasBeban+oe;
+  const laba=rev-totalBeban+oi;
+  const npm=rev?laba/rev:0;
+  const aset=sheet.filter(a=>["Kas & Bank","Akun Piutang","Aktiva Tetap"].includes(a.type)).reduce((s,a)=>s+Number(a.balance),0);
+  const hutang=sheet.filter(a=>a.type==="Kewajiban").reduce((s,a)=>s+Number(a.balance),0);
+  const bankBal=bal.filter(b=>b.code==="1-10002").reduce((s,b)=>s+Number(b.balance),0);
+  const kasBal=bal.filter(b=>b.code==="1-10007").reduce((s,b)=>s+Number(b.balance),0);
+  const tP=target?Number(target.target_pendapatan):0;
+
+  const trendData = (trend||[]).map(t=>({ m:MONTHS[Number(t.bulan)-1]?.slice(0,3)||t.bulan,
+    rev:Number(t.pendapatan), profit:Number(t.laba) }));
+
+  const KPI=({label,val,tone})=>(
+    <div style={{ border:`1px solid ${C.line}`, borderRadius:12, padding:"14px 16px" }}>
+      <div style={{ fontSize:12, color:C.sub }}>{label}</div>
+      <div className="mono" style={{ fontSize:19, fontWeight:700, color:tone||C.ink, marginTop:4 }}>{val}</div>
+    </div>
+  );
+
+  return (
+    <div className="pop">
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8 }}>
+        <div>
+          <div style={{ fontSize:12, letterSpacing:".12em", color:C.brass, fontWeight:600, textTransform:"uppercase" }}>Laporan untuk Owner</div>
+          <h1 style={{ margin:"5px 0 3px", fontSize:25, fontWeight:700 }}>{orgName}</h1>
+          <div style={{ color:C.sub, fontSize:13.5 }}>Ringkasan Keuangan Tahun {YEAR} · dicetak {new Date().toLocaleDateString("id-ID")}</div>
+        </div>
+        <button className="btn no-print" onClick={()=>window.print()}
+          style={{ display:"flex", alignItems:"center", gap:6, background:C.deep, color:"#fff",
+            padding:"10px 18px", borderRadius:9, fontSize:13, fontWeight:600 }}>
+          <Printer size={15} /> Simpan PDF</button>
+      </div>
+
+      {/* Ringkasan eksekutif */}
+      <div className="card" style={{ padding:"18px 20px", marginBottom:16 }}>
+        <div style={{ fontWeight:700, fontSize:15, marginBottom:14 }}>Ringkasan Eksekutif</div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:12 }}>
+          <KPI label="Total Pendapatan" val={money(rev)} tone={C.teal} />
+          <KPI label="Total Beban" val={money(totalBeban)} tone={C.neg} />
+          <KPI label="Laba Bersih" val={money(laba)} tone={C.pos} />
+          <KPI label="Margin Laba" val={pct(npm)} tone={npm>=0.15?C.pos:C.neg} />
+          <KPI label="Saldo Bank" val={money(bankBal)} />
+          <KPI label="Saldo Kas" val={money(kasBal)} />
+          <KPI label="Total Aset" val={money(aset)} />
+          <KPI label="Total Hutang" val={money(hutang)} tone={hutang>0?C.neg:C.sub} />
+        </div>
+      </div>
+
+      {/* Grafik tren */}
+      <div className="card" style={{ padding:"18px 18px 8px", marginBottom:16 }}>
+        <div style={{ fontWeight:600, fontSize:14.5, marginBottom:2 }}>Tren Pendapatan & Laba {YEAR}</div>
+        <ResponsiveContainer width="100%" height={230}>
+          <AreaChart data={trendData} margin={{ left:-18, right:6, top:10 }}>
+            <defs>
+              <linearGradient id="or" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.teal} stopOpacity={.35}/><stop offset="100%" stopColor={C.teal} stopOpacity={0}/></linearGradient>
+              <linearGradient id="op" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.pos} stopOpacity={.25}/><stop offset="100%" stopColor={C.pos} stopOpacity={0}/></linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
+            <XAxis dataKey="m" tick={{ fontSize:12, fill:C.sub }} axisLine={false} tickLine={false} />
+            <YAxis tick={{ fontSize:11, fill:C.sub }} tickFormatter={moneyShort} axisLine={false} tickLine={false} width={54} />
+            <Tooltip formatter={(v)=>money(v)} contentStyle={{ borderRadius:10, border:`1px solid ${C.line}`, fontSize:12 }} />
+            <Area type="monotone" dataKey="rev" stroke={C.teal} strokeWidth={2.4} fill="url(#or)" name="Pendapatan" />
+            <Area type="monotone" dataKey="profit" stroke={C.pos} strokeWidth={2.4} fill="url(#op)" name="Laba" />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Target vs pencapaian */}
+      {target && (
+        <div className="card" style={{ padding:"18px 20px", marginBottom:16 }}>
+          <div style={{ fontWeight:600, fontSize:14.5, marginBottom:12 }}>Pencapaian Target {YEAR}</div>
+          {[
+            { l:"Pendapatan", a:Number(ach.pendapatan), t:tP, m:true },
+            { l:"Laba Bersih", a:Number(ach.laba), t:Number(target.target_laba), m:true },
+            { l:"Jumlah Transaksi", a:Number(ach.transaksi), t:Number(target.target_transaksi), m:false },
+          ].map(x=>{ const p=x.t?x.a/x.t:0; return (
+            <div key={x.l} style={{ marginBottom:12 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", fontSize:12.5, marginBottom:5 }}>
+                <span style={{ fontWeight:600 }}>{x.l}</span>
+                <span className="mono">{x.m?money(x.a):x.a.toLocaleString("id-ID")} / {x.m?money(x.t):x.t.toLocaleString("id-ID")} · <b style={{ color:p>=1?C.pos:C.brass }}>{pct(p)}</b></span>
+              </div>
+              <div style={{ height:8, borderRadius:99, background:C.surf, overflow:"hidden" }}>
+                <div style={{ height:"100%", borderRadius:99, background:p>=1?C.pos:C.teal, width:`${Math.min(100,p*100)}%` }} /></div>
+            </div>
+          );})}
+        </div>
+      )}
+
+      {/* Laba Rugi ringkas */}
+      <div className="card" style={{ overflow:"hidden", marginBottom:16 }}>
+        <div style={{ padding:"12px 20px", background:C.deep, color:"#fff", fontWeight:700, fontSize:13.5 }}>LAPORAN LABA RUGI</div>
+        <ORow l="Total Pendapatan" v={rev} c={C.pos} />
+        <ORow l="Cost of Goods Sold" v={-cogs} />
+        <ORow l="Biaya Operasional (Bank)" v={-opBank} />
+        <ORow l="Beban Umum & Admin (Kas)" v={-kasBeban} />
+        {oi>0 && <ORow l="Pendapatan Lain" v={oi} c={C.pos} />}
+        {oe>0 && <ORow l="Beban Lain" v={-oe} />}
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 200px", padding:"13px 20px",
+          background:laba>=0?C.pos+"12":C.neg+"12", fontWeight:700, fontSize:14 }}>
+          <span>LABA BERSIH</span>
+          <span className="mono" style={{ textAlign:"right", color:laba>=0?C.pos:C.neg }}>{money(laba)}</span></div>
+      </div>
+
+      {/* Neraca ringkas */}
+      <div className="card" style={{ overflow:"hidden" }}>
+        <div style={{ padding:"12px 20px", background:C.deep, color:"#fff", fontWeight:700, fontSize:13.5 }}>POSISI KEUANGAN (NERACA)</div>
+        <ORow l="Total Aset" v={aset} />
+        <ORow l="Total Kewajiban (Hutang)" v={hutang} c={hutang>0?C.neg:C.sub} />
+        <ORow l="Total Modal + Laba" v={aset-hutang} c={C.brass} />
+      </div>
+    </div>
+  );
+}
+const ORow = ({ l, v, c }) => (
+  <div style={{ display:"grid", gridTemplateColumns:"1fr 200px", padding:"10px 20px",
+    borderBottom:`1px solid ${C.line}`, fontSize:13 }}>
+    <span style={{ color:C.sub }}>{l}</span>
+    <span className="mono" style={{ textAlign:"right", fontWeight:600, color:c||C.ink }}>{money(v)}</span>
+  </div>
+);
 
 // ============================================================
 // CHART OF ACCOUNT
