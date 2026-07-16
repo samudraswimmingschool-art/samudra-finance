@@ -20,7 +20,8 @@ import {
   addAccount, deleteAccount, setAccountActive, updateAccount, accountUsedCount,
   getTarget, saveTarget, getAchievement,
   getFixedAssets, addFixedAsset, updateFixedAsset, deleteFixedAsset,
-  rpcAssetDepreciation, postDepreciation,
+  rpcAssetDepreciation, postDepreciation, getDepreciationSchedule,
+  postDepreciationMonth, postAllOutstanding,
   rpcPnl, rpcBalanceSheet, rpcRetainedProfit, rpcCashFlow, rpcAccountBalances,
   periodRange, signOut,
 } from "./lib/api";
@@ -1785,18 +1786,35 @@ function AsetTetap({ orgId, acctByCode, accounts }) {
     try { await deleteFixedAsset(a.id); reload(); } catch(e){ alert(e.message); }
   };
 
-  const postingBulanIni = async (a) => {
-    const now = new Date();
-    const y = YEAR, m = now.getMonth()+1;
-    if (!confirm(`Posting penyusutan ${a.name} untuk ${m}/${y} sebesar ${money(a.depr_per_month)}?`)) return;
+  // Posting SEMUA bulan tertunggak sekaligus
+  const postingSemua = async (a) => {
+    const belum = Math.round(Number(a.accumulated)/Number(a.depr_per_month)) - Math.round(Number(a.posted_amount)/Number(a.depr_per_month));
+    if (!confirm(`Posting semua penyusutan ${a.name} yang belum tercatat (perkiraan ${belum} bulan)?\n\nSetiap bulan dari perolehan sampai sekarang akan dicatat ke jurnal.`)) return;
     setBusy(true); setFlash("");
     try {
-      await postDepreciation(orgId, a, y, m, Number(a.depr_per_month), acctByCode);
-      setFlash(`✓ Penyusutan ${a.name} bulan ${m}/${y} diposting ke jurnal`);
+      const n = await postAllOutstanding(orgId, a, asOf, acctByCode);
+      setFlash(n>0 ? `✓ ${n} bulan penyusutan ${a.name} berhasil diposting ke jurnal`
+                   : `Semua penyusutan ${a.name} sudah tercatat sebelumnya`);
       reload();
-    } catch(e){
-      setFlash("✗ " + (e.message.includes("duplicate")?"Penyusutan bulan ini sudah diposting":e.message));
-    }
+    } catch(e){ setFlash("✗ "+e.message); }
+    finally { setBusy(false); }
+  };
+
+  // Modal jadwal per-bulan
+  const [schedFor, setSchedFor] = useState(null);   // aset yang dibuka jadwalnya
+  const [sched, setSched] = useState([]);
+  const bukaJadwal = async (a) => {
+    setSchedFor(a); setSched([]);
+    try { setSched(await getDepreciationSchedule(orgId, a.id, asOf)); }
+    catch(e){ setFlash("✗ "+e.message); }
+  };
+  const postingSatuBulan = async (a, s) => {
+    setBusy(true);
+    try {
+      await postDepreciationMonth(orgId, a, s.period_year, s.period_month, Number(s.amount), acctByCode);
+      setSched(await getDepreciationSchedule(orgId, a.id, asOf));
+      reload();
+    } catch(e){ setFlash("✗ "+e.message); }
     finally { setBusy(false); }
   };
 
@@ -1884,21 +1902,30 @@ function AsetTetap({ orgId, acctByCode, accounts }) {
         {rows.length===0 && <div style={{ padding:"20px 18px", color:C.sub, fontSize:13 }}>Belum ada aset. Klik "Tambah Aset" untuk mulai.</div>}
         {rows.map(a=>{
           const lunas = Number(a.book_value) <= Number(a.residual);
+          const posted = Number(a.posted_amount);
+          const seharusnya = Number(a.accumulated);
+          const tertunggak = seharusnya - posted;   // yang belum diposting
+          const adaTertunggak = tertunggak > 0.5;
           return (
             <div key={a.id} style={{ display:"grid", gridTemplateColumns:"1.6fr 110px 110px 90px 110px 110px 130px",
               padding:"11px 18px", borderBottom:`1px solid ${C.line}`, fontSize:12.5, alignItems:"center" }}>
               <span><b style={{ color:C.deep }}>{a.name}</b>
                 {a.category && <span style={{ fontSize:10.5, color:C.sub }}> · {a.category}</span>}
-                <div style={{ fontSize:10.5, color:C.sub }}>Beli: {a.acquire_date} · umur {a.useful_life_years}th</div></span>
+                <div style={{ fontSize:10.5, color:C.sub }}>Beli: {a.acquire_date} · umur {a.useful_life_years}th
+                  {adaTertunggak && <span style={{ color:C.brass, fontWeight:700 }}> · {money(tertunggak)} belum diposting</span>}
+                  {!adaTertunggak && posted>0 && <span style={{ color:C.pos, fontWeight:700 }}> · ✓ tercatat</span>}
+                </div></span>
               <span className="mono" style={{ textAlign:"right" }}>{money(Number(a.cost))}</span>
               <span className="mono" style={{ textAlign:"right", color:C.sub }}>{money(Number(a.depr_per_month))}</span>
               <span style={{ textAlign:"center", color:C.sub }}>{a.months_elapsed}/{a.useful_life_years*12}</span>
               <span className="mono" style={{ textAlign:"right", color:C.neg }}>{money(Number(a.accumulated))}</span>
               <span className="mono" style={{ textAlign:"right", fontWeight:700, color:lunas?C.sub:C.teal }}>{money(Number(a.book_value))}</span>
               <span className="no-print" style={{ display:"flex", gap:6, justifyContent:"flex-end", alignItems:"center" }}>
-                {!lunas && <button className="btn" onClick={()=>postingBulanIni(a)} disabled={busy} title="Posting penyusutan bulan ini"
+                {adaTertunggak && <button className="btn" onClick={()=>postingSemua(a)} disabled={busy} title="Posting semua bulan tertunggak"
                   style={{ background:C.teal+"15", color:C.teal, fontSize:10.5, fontWeight:700, padding:"4px 8px", borderRadius:6 }}>
                   POSTING</button>}
+                <button className="btn" onClick={()=>bukaJadwal(a)} title="Lihat jadwal per bulan"
+                  style={{ background:"transparent", color:C.sub }} disabled={busy}><FileText size={13} /></button>
                 <button className="btn" onClick={()=>startEdit(a)} title="Edit"
                   style={{ background:"transparent", color:C.sub }}><Pencil size={13} /></button>
                 <button className="btn" onClick={()=>hapus(a)} title="Hapus"
@@ -1910,10 +1937,45 @@ function AsetTetap({ orgId, acctByCode, accounts }) {
       </div>
       <div style={{ fontSize:11.5, color:C.sub, marginTop:12, lineHeight:1.6 }}>
         <b>Cara kerja (garis lurus, SAK EMKM):</b> tiap bulan aset menyusut sebesar (Harga − Residu) ÷ (Umur × 12).
-        Klik <b>POSTING</b> untuk mencatat beban penyusutan bulan berjalan ke jurnal (Debet "Beban Penyusutan",
-        Kredit "Akumulasi Penyusutan"). Akumulasi mengurangi nilai aset di Neraca, dan beban muncul di Laba Rugi.
-        Kolom "Bulan" menunjukkan berapa bulan sudah berjalan dari total masa manfaat.
+        Tombol <b>POSTING</b> mencatat <b>semua bulan tertunggak sekaligus</b> ke jurnal (mis. aset dibeli Januari, sekarang
+        Juli → 7 bulan langsung tercatat). Ikon <b>dokumen</b> (📄) membuka jadwal per bulan kalau Anda ingin posting
+        satu-satu. Tiap posting membuat jurnal Debet "Beban Penyusutan", Kredit "Akumulasi Penyusutan" — akumulasi
+        mengurangi nilai aset di Neraca, beban muncul di Laba Rugi. Sistem mencegah dobel posting untuk bulan yang sama.
       </div>
+
+      {/* Modal jadwal per bulan */}
+      {schedFor && (
+        <div className="no-print" onClick={()=>setSchedFor(null)}
+          style={{ position:"fixed", inset:0, background:"rgba(15,42,42,.45)", display:"grid", placeItems:"center", zIndex:50, padding:20 }}>
+          <div onClick={e=>e.stopPropagation()} className="pop"
+            style={{ background:"#fff", borderRadius:14, width:"min(560px,100%)", maxHeight:"80vh", overflow:"auto", boxShadow:"0 20px 60px rgba(0,0,0,.25)" }}>
+            <div style={{ padding:"16px 20px", borderBottom:`1px solid ${C.line}`, display:"flex", justifyContent:"space-between", alignItems:"center", position:"sticky", top:0, background:"#fff" }}>
+              <div>
+                <div style={{ fontWeight:700, fontSize:15 }}>Jadwal Penyusutan</div>
+                <div style={{ fontSize:12.5, color:C.sub }}>{schedFor.name} · {money(Number(schedFor.depr_per_month))}/bulan</div>
+              </div>
+              <button className="btn" onClick={()=>setSchedFor(null)} style={{ background:"transparent", color:C.sub }}><X size={18} /></button>
+            </div>
+            <div style={{ padding:"8px 0" }}>
+              {sched.length===0 && <div style={{ padding:"18px 20px", color:C.sub, fontSize:13 }}>Memuat jadwal…</div>}
+              {sched.map((s,i)=>(
+                <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
+                  padding:"10px 20px", borderBottom:`1px solid ${C.line}` }}>
+                  <span style={{ fontSize:13 }}>{MONTHS[s.period_month-1]} {s.period_year}</span>
+                  <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+                    <span className="mono" style={{ fontSize:12.5, color:C.sub }}>{money(Number(s.amount))}</span>
+                    {s.is_posted
+                      ? <span style={{ fontSize:11, fontWeight:700, color:C.pos, minWidth:90, textAlign:"right" }}>✓ Tercatat</span>
+                      : <button className="btn" onClick={()=>postingSatuBulan(schedFor, s)} disabled={busy}
+                          style={{ background:C.teal, color:"#fff", fontSize:11, fontWeight:700, padding:"5px 12px", borderRadius:6, minWidth:90 }}>
+                          Posting</button>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

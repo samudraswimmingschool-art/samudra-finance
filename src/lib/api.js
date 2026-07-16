@@ -356,6 +356,52 @@ export async function postDepreciation(orgId, asset, year, month, amount, acctBy
   return true;
 }
 
+// Ambil jadwal penyusutan per bulan untuk satu aset (dengan status posting)
+export async function getDepreciationSchedule(orgId, assetId, asOf) {
+  const { data, error } = await supabase.rpc("depreciation_schedule", {
+    p_org: orgId, p_asset: assetId, p_as_of: asOf,
+  });
+  if (error) throw error;
+  return data;
+}
+
+// Posting satu bulan spesifik (dipakai per-bulan & oleh post-all)
+export async function postDepreciationMonth(orgId, asset, year, month, amount, acctByCode) {
+  const bebanId = acctByCode["6-60900"]?.id;
+  const akumId = acctByCode["1-10800"]?.id;
+  if (!bebanId || !akumId) throw new Error("Akun penyusutan belum ada. Jalankan SQL aset_penyusutan.sql dulu.");
+  const dateStr = `${year}-${String(month).padStart(2,"0")}-28`;
+  const { data: je, error: eh } = await supabase.from("journal_entries").insert({
+    org_id: orgId, entry_date: dateStr,
+    memo: `Penyusutan ${asset.name} — ${month}/${year}`,
+    cash_source: null, kind: "general",
+  }).select().single();
+  if (eh) throw eh;
+  const { error: el } = await supabase.from("journal_lines").insert([
+    { entry_id: je.id, account_id: bebanId, debit: amount, credit: 0 },
+    { entry_id: je.id, account_id: akumId, debit: 0, credit: amount },
+  ]);
+  if (el) throw el;
+  const { error: ep } = await supabase.from("depreciation_postings").insert({
+    org_id: orgId, asset_id: asset.id,
+    period_year: year, period_month: month, amount, entry_id: je.id,
+  });
+  if (ep) throw ep;
+  return true;
+}
+
+// Posting SEMUA bulan yang belum diposting (tertunggak) untuk satu aset
+export async function postAllOutstanding(orgId, asset, asOf, acctByCode) {
+  const schedule = await getDepreciationSchedule(orgId, asset.id, asOf);
+  const belum = schedule.filter(s => !s.is_posted);
+  let count = 0;
+  for (const s of belum) {
+    await postDepreciationMonth(orgId, asset, s.period_year, s.period_month, Number(s.amount), acctByCode);
+    count++;
+  }
+  return count;
+}
+
 // ---- Auth ----
 export async function signIn(email, password) {
   const { error } = await supabase.auth.signInWithPassword({ email, password });
