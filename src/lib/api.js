@@ -402,6 +402,110 @@ export async function postAllOutstanding(orgId, asset, asOf, acctByCode) {
   return count;
 }
 
+// ---- Saldo Awal (opening balance) ----
+export async function hasOpeningBalance(orgId) {
+  const { data, error } = await supabase.rpc("has_opening_balance", { p_org: orgId });
+  if (error) throw error;
+  return data;
+}
+
+// Simpan saldo awal: buat jurnal kind='opening'.
+// lines = [{account_id, debit, credit}], harus seimbang; modal owner sbagai penyeimbang.
+export async function saveOpeningBalance(orgId, date, lines) {
+  const { data: je, error: eh } = await supabase.from("journal_entries").insert({
+    org_id: orgId, entry_date: date,
+    memo: "Saldo Awal (Opening Balance)",
+    cash_source: null, kind: "opening",
+  }).select().single();
+  if (eh) throw eh;
+  const rows = lines
+    .filter(l => (l.debit||0) > 0 || (l.credit||0) > 0)
+    .map(l => ({ entry_id: je.id, account_id: l.account_id, debit: l.debit||0, credit: l.credit||0 }));
+  const { error: el } = await supabase.from("journal_lines").insert(rows);
+  if (el) throw el;
+  return je;
+}
+
+// ---- Pendapatan Diterima di Muka ----
+export async function getDeferredSummary(orgId, asOf) {
+  const { data, error } = await supabase.rpc("deferred_summary", { p_org: orgId, p_as_of: asOf });
+  if (error) throw error;
+  return data;
+}
+
+// Catat penerimaan di muka: jurnal Debet Kas/Bank, Kredit Pendapatan Diterima di Muka (2-20005)
+export async function addDeferredRevenue(orgId, d, acctByCode) {
+  const cashId = d.cash === "kas" ? acctByCode["1-10007"]?.id : acctByCode["1-10002"]?.id;
+  const defAccId = acctByCode["2-20005"]?.id;
+  if (!cashId || !defAccId) throw new Error("Akun Kas/Bank atau Pendapatan Diterima di Muka belum ada.");
+  const { data: je, error: eh } = await supabase.from("journal_entries").insert({
+    org_id: orgId, entry_date: d.received_date,
+    memo: d.description || "Penerimaan di muka",
+    cash_source: d.cash, kind: "general",
+  }).select().single();
+  if (eh) throw eh;
+  const { error: el } = await supabase.from("journal_lines").insert([
+    { entry_id: je.id, account_id: cashId, debit: d.total_amount, credit: 0 },
+    { entry_id: je.id, account_id: defAccId, debit: 0, credit: d.total_amount },
+  ]);
+  if (el) throw el;
+  const { error: ed } = await supabase.from("deferred_revenue").insert({
+    org_id: orgId, received_date: d.received_date, description: d.description,
+    total_amount: d.total_amount, months: d.months, branch: d.branch || null, entry_id: je.id,
+  });
+  if (ed) throw ed;
+  return je;
+}
+
+export async function deleteDeferredRevenue(id) {
+  const { error } = await supabase.from("deferred_revenue").delete().eq("id", id);
+  if (error) throw error;
+}
+
+export async function getDeferredSchedule(orgId, deferredId, asOf) {
+  const { data, error } = await supabase.rpc("deferred_schedule", {
+    p_org: orgId, p_deferred: deferredId, p_as_of: asOf,
+  });
+  if (error) throw error;
+  return data;
+}
+
+// Akui satu bulan: jurnal Debet Pendapatan Diterima di Muka (2-20005), Kredit Pendapatan (4-40000)
+export async function recognizeDeferredMonth(orgId, deferred, year, month, amount, acctByCode, revenueCode) {
+  const defAccId = acctByCode["2-20005"]?.id;
+  const revId = acctByCode[revenueCode || "4-40000"]?.id;
+  if (!defAccId || !revId) throw new Error("Akun pendapatan belum lengkap.");
+  const dateStr = `${year}-${String(month).padStart(2,"0")}-28`;
+  const { data: je, error: eh } = await supabase.from("journal_entries").insert({
+    org_id: orgId, entry_date: dateStr,
+    memo: `Pengakuan pendapatan — ${deferred.description||"diterima di muka"} (${month}/${year})`,
+    cash_source: null, kind: "general",
+  }).select().single();
+  if (eh) throw eh;
+  const { error: el } = await supabase.from("journal_lines").insert([
+    { entry_id: je.id, account_id: defAccId, debit: amount, credit: 0 },
+    { entry_id: je.id, account_id: revId, debit: 0, credit: amount },
+  ]);
+  if (el) throw el;
+  const { error: er } = await supabase.from("deferred_recognitions").insert({
+    org_id: orgId, deferred_id: deferred.id,
+    period_year: year, period_month: month, amount, entry_id: je.id,
+  });
+  if (er) throw er;
+  return true;
+}
+
+export async function recognizeAllDue(orgId, deferred, asOf, acctByCode, revenueCode) {
+  const sched = await getDeferredSchedule(orgId, deferred.id, asOf);
+  const belum = sched.filter(s => !s.is_recognized);
+  let n = 0;
+  for (const s of belum) {
+    await recognizeDeferredMonth(orgId, deferred, s.period_year, s.period_month, Number(s.amount), acctByCode, revenueCode);
+    n++;
+  }
+  return n;
+}
+
 // ---- Auth ----
 export async function signIn(email, password) {
   const { error } = await supabase.auth.signInWithPassword({ email, password });

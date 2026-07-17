@@ -5,7 +5,7 @@ import {
   Search, LogOut, RefreshCw, Wallet, ArrowDownCircle, ArrowUpCircle,
   PiggyBank, ShoppingCart, ChevronLeft, Pencil, BarChart3, X,
   TrendingDown, Lightbulb, Printer, ChevronDown, ChevronUp, Banknote,
-  Target as TargetIcon, FileText, Package
+  Target as TargetIcon, FileText, Package, Flag, Clock
 } from "lucide-react";
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -22,6 +22,9 @@ import {
   getFixedAssets, addFixedAsset, updateFixedAsset, deleteFixedAsset,
   rpcAssetDepreciation, postDepreciation, getDepreciationSchedule,
   postDepreciationMonth, postAllOutstanding,
+  hasOpeningBalance, saveOpeningBalance,
+  getDeferredSummary, addDeferredRevenue, deleteDeferredRevenue,
+  getDeferredSchedule, recognizeDeferredMonth, recognizeAllDue,
   rpcPnl, rpcBalanceSheet, rpcRetainedProfit, rpcCashFlow, rpcAccountBalances,
   periodRange, signOut,
 } from "./lib/api";
@@ -195,6 +198,8 @@ export default function App() {
           {tab==="cashflow"  && <CashFlow flow={flow} detail={flowDetail} />}
           {tab==="coa"       && <COAView accounts={accounts} orgId={orgId} onChange={reloadAccounts} />}
           {tab==="aset"      && <AsetTetap orgId={orgId} acctByCode={acctByCode} accounts={accounts} />}
+          {tab==="saldoawal" && <SaldoAwal orgId={orgId} accounts={accounts} acctByCode={acctByCode} onChange={load} />}
+          {tab==="deferred"  && <Deferred orgId={orgId} acctByCode={acctByCode} accounts={accounts} onChange={load} />}
           </div>
         </main>
       </div>
@@ -218,6 +223,8 @@ const NAV = [
   { id:"equity", label:"Perubahan Modal", icon:TrendingUp },
   { id:"cashflow", label:"Arus Kas", icon:ArrowLeftRight },
   { sec:"DATA" },
+  { id:"saldoawal", label:"Saldo Awal", icon:Flag },
+  { id:"deferred", label:"Pendapatan Dimuka", icon:Clock },
   { id:"aset", label:"Aset Tetap", icon:Package },
   { id:"coa", label:"Chart of Account", icon:Building2 },
 ];
@@ -1736,6 +1743,289 @@ const ORow = ({ l, v, c }) => (
     <span className="mono" style={{ textAlign:"right", fontWeight:600, color:c||C.ink }}>{money(v)}</span>
   </div>
 );
+
+// ============================================================
+// SALDO AWAL (Opening Balance) — tetapkan posisi awal, modal owner penyeimbang
+// ============================================================
+function SaldoAwal({ orgId, accounts, acctByCode, onChange }) {
+  const [sudahAda, setSudahAda] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState("");
+  const [date, setDate] = useState(`${YEAR}-01-01`);
+  // baris aset/kewajiban yang dimiliki di awal (selain modal)
+  const asetAkun = accounts.filter(a=>["Kas & Bank","Akun Piutang","Aktiva Tetap","Kewajiban"].includes(a.type)
+    && a.is_active!==false && a.code!=="1-10800");
+  const [lines, setLines] = useState([{ account_id: asetAkun[0]?.id || "", amount:"" }]);
+
+  useEffect(()=>{ (async()=>{
+    try { setSudahAda(await hasOpeningBalance(orgId)); } catch(e){ setFlash("✗ "+e.message); }
+  })(); }, [orgId]);
+
+  const modalId = acctByCode["3-30001"]?.id;
+  const setLine=(i,f,v)=>setLines(lines.map((l,x)=>x===i?{...l,[f]:v}:l));
+  const addLine=()=>setLines([...lines,{account_id:asetAkun[0]?.id||"",amount:""}]);
+  const rmLine=(i)=>setLines(lines.filter((_,x)=>x!==i));
+
+  // hitung: aset (normal Db) di debet, kewajiban (normal Kr) di kredit; modal = penyeimbang
+  const calc = lines.map(l=>{
+    const acc = accounts.find(a=>a.id===l.account_id);
+    const amt = +l.amount||0;
+    return { acc, amt, isAset: acc?.normal_side==="Db" };
+  }).filter(x=>x.acc && x.amt>0);
+  const totalAset = calc.filter(x=>x.isAset).reduce((s,x)=>s+x.amt,0);
+  const totalKewajiban = calc.filter(x=>!x.isAset).reduce((s,x)=>s+x.amt,0);
+  const modalPenyeimbang = totalAset - totalKewajiban; // modal owner
+
+  const simpan = async () => {
+    if (calc.length===0) { setFlash("✗ Isi minimal satu akun & nominal"); return; }
+    if (modalPenyeimbang < 0) { setFlash("✗ Kewajiban melebihi aset — cek angka"); return; }
+    setBusy(true); setFlash("");
+    try {
+      const jl = [];
+      calc.forEach(x=>{
+        if (x.isAset) jl.push({ account_id:x.acc.id, debit:x.amt, credit:0 });
+        else jl.push({ account_id:x.acc.id, debit:0, credit:x.amt });
+      });
+      // modal owner sebagai penyeimbang (kredit)
+      if (modalPenyeimbang > 0) jl.push({ account_id: modalId, debit:0, credit: modalPenyeimbang });
+      await saveOpeningBalance(orgId, date, jl);
+      setFlash("✓ Saldo awal tersimpan");
+      setSudahAda(true);
+      onChange();
+    } catch(e){ setFlash("✗ "+e.message); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="pop">
+      <PageHead eyebrow="Master Data" title="Saldo Awal"
+        sub="Tetapkan posisi awal aset & kewajiban — Modal Owner otomatis jadi penyeimbang" />
+
+      {sudahAda && (
+        <div className="card" style={{ padding:"14px 18px", marginBottom:16, background:C.brass+"10",
+          border:`1px solid ${C.brass}40`, fontSize:13, color:C.ink }}>
+          <b style={{ color:C.brass }}>⚠ Saldo awal sudah pernah dibuat.</b> Menambah lagi akan membuat jurnal
+          saldo awal kedua (bisa menyebabkan dobel). Pastikan ini memang yang Anda inginkan.
+        </div>
+      )}
+
+      <div className="card" style={{ padding:20, marginBottom:16 }}>
+        <div style={{ fontSize:12.5, color:C.sub, marginBottom:14, lineHeight:1.6, background:C.surf, padding:"12px 14px", borderRadius:8 }}>
+          <b>Cara pakai:</b> masukkan aset yang dimiliki Samudra pada tanggal mulai pencatatan (mis. saldo kas,
+          peralatan, dll) dan kewajiban/hutang awal (kalau ada). Sistem menghitung <b>Modal Owner</b> sebagai
+          penyeimbang secara otomatis (Aset − Kewajiban = Modal). Karena uang beroperasi lewat rekening owner,
+          Anda cukup catat aset yang benar-benar dimiliki entitas — sisanya jadi modal owner.
+        </div>
+
+        <div style={{ marginBottom:14, maxWidth:200 }}>
+          <label style={lbl}>Tanggal Saldo Awal</label>
+          <input type="date" value={date} onChange={e=>setDate(e.target.value)} style={inp} />
+        </div>
+
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 180px 40px", gap:8, fontSize:11.5,
+          color:C.sub, fontWeight:600, padding:"0 2px 6px" }}>
+          <span>AKUN (aset / kewajiban)</span><span style={{ textAlign:"right" }}>NILAI</span><span /></div>
+        {lines.map((l,i)=>(
+          <div key={i} style={{ display:"grid", gridTemplateColumns:"1fr 180px 40px", gap:8, marginBottom:7, alignItems:"center" }}>
+            <select value={l.account_id} onChange={e=>setLine(i,"account_id",e.target.value)} style={inp}>
+              {asetAkun.map(a=><option key={a.id} value={a.id}>{a.code} · {a.name} ({a.type})</option>)}
+            </select>
+            <input className="mono" inputMode="numeric" placeholder="0" value={l.amount}
+              onChange={e=>setLine(i,"amount",e.target.value.replace(/\D/g,""))} style={{ ...inp, textAlign:"right" }} />
+            <button className="btn" onClick={()=>rmLine(i)} disabled={lines.length<=1}
+              style={{ background:"transparent", color:lines.length<=1?C.line:C.neg, display:"grid", placeItems:"center", height:38 }}><Trash2 size={16} /></button>
+          </div>
+        ))}
+        <button className="btn" onClick={addLine}
+          style={{ display:"inline-flex", alignItems:"center", gap:6, background:C.surf, color:C.teal,
+            padding:"8px 12px", borderRadius:8, fontSize:13, fontWeight:600, marginTop:4 }}>
+          <Plus size={15} /> Tambah baris</button>
+
+        <div style={{ marginTop:16, padding:"12px 14px", borderRadius:10, background:C.surf, fontSize:13 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", padding:"3px 0" }}>
+            <span style={{ color:C.sub }}>Total Aset</span>
+            <span className="mono" style={{ fontWeight:600 }}>{money(totalAset)}</span></div>
+          <div style={{ display:"flex", justifyContent:"space-between", padding:"3px 0" }}>
+            <span style={{ color:C.sub }}>Total Kewajiban</span>
+            <span className="mono" style={{ fontWeight:600, color:C.neg }}>{money(totalKewajiban)}</span></div>
+          <div style={{ display:"flex", justifyContent:"space-between", padding:"6px 0 0", marginTop:4, borderTop:`1px solid ${C.line}` }}>
+            <span style={{ fontWeight:700 }}>Modal Owner (penyeimbang)</span>
+            <span className="mono" style={{ fontWeight:700, color:C.teal }}>{money(modalPenyeimbang)}</span></div>
+        </div>
+
+        <button className="btn" onClick={simpan} disabled={busy||calc.length===0}
+          style={{ width:"100%", marginTop:14, padding:"12px", borderRadius:10,
+            background: calc.length&&!busy?C.teal:C.line, color:"#fff", fontWeight:700, fontSize:14.5 }}>
+          {busy?"Menyimpan…":"Simpan Saldo Awal"}</button>
+        {flash && <div className="pop" style={{ marginTop:10, textAlign:"center",
+          color:flash.startsWith("✓")?C.pos:C.neg, fontSize:13, fontWeight:600 }}>{flash}</div>}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// PENDAPATAN DITERIMA DI MUKA (agregat) — pengakuan bertahap sesuai SAK
+// ============================================================
+function Deferred({ orgId, acctByCode, accounts, onChange }) {
+  const [rows, setRows] = useState([]);
+  const [showForm, setShowForm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState("");
+  const asOf = `${YEAR}-${String(new Date().getMonth()+1).padStart(2,"0")}-28`;
+  const revenueAccounts = accounts.filter(a=>a.type==="Pendapatan" && a.is_active!==false);
+  const blank = () => ({ received_date:`${YEAR}-07-01`, description:"", total_amount:"",
+    months:"3", cash:"bank", revenueCode:"4-40000" });
+  const [form, setForm] = useState(blank());
+
+  const reload = async () => {
+    try { setRows(await getDeferredSummary(orgId, asOf)); } catch(e){ setFlash("✗ "+e.message); }
+  };
+  useEffect(()=>{ if(orgId) reload(); /* eslint-disable-next-line */ }, [orgId]);
+
+  const simpan = async () => {
+    if (!form.total_amount || !form.months) { setFlash("✗ Jumlah & lama bulan wajib diisi"); return; }
+    setBusy(true); setFlash("");
+    try {
+      await addDeferredRevenue(orgId, {
+        received_date: form.received_date, description: form.description,
+        total_amount: +form.total_amount||0, months: +form.months||1, cash: form.cash,
+      }, acctByCode);
+      setFlash("✓ Penerimaan di muka tercatat sebagai kewajiban");
+      setForm(blank()); setShowForm(false);
+      reload(); onChange();
+    } catch(e){ setFlash("✗ "+e.message); }
+    finally { setBusy(false); }
+  };
+
+  const hapus = async (d) => {
+    if (!confirm("Hapus catatan pendapatan diterima di muka ini? (jurnal terkait tetap ada)")) return;
+    try { await deleteDeferredRevenue(d.id); reload(); } catch(e){ alert(e.message); }
+  };
+
+  const akuiSemua = async (d) => {
+    if (!confirm(`Akui semua pendapatan ${d.description||""} yang sudah jatuh tempo s/d sekarang?`)) return;
+    setBusy(true); setFlash("");
+    try {
+      const n = await recognizeAllDue(orgId, d, asOf, acctByCode, "4-40000");
+      setFlash(n>0?`✓ ${n} bulan pendapatan diakui`:"Semua sudah diakui sebelumnya");
+      reload(); onChange();
+    } catch(e){ setFlash("✗ "+e.message); }
+    finally { setBusy(false); }
+  };
+
+  const totalDiterima = rows.reduce((s,d)=>s+Number(d.total_amount),0);
+  const totalDiakui = rows.reduce((s,d)=>s+Number(d.recognized),0);
+  const totalSisa = rows.reduce((s,d)=>s+Number(d.remaining),0);
+
+  return (
+    <div className="pop">
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+        <PageHead eyebrow="Master Data" title="Pendapatan Diterima di Muka"
+          sub="Iuran/paket dibayar di depan — diakui bertahap tiap bulan (sesuai SAK)" />
+        <button className="btn no-print" onClick={()=>{ setShowForm(!showForm); setFlash(""); }}
+          style={{ display:"flex", alignItems:"center", gap:6, background:showForm?C.surf:C.teal,
+            color:showForm?C.sub:"#fff", padding:"9px 16px", borderRadius:9, fontSize:13, fontWeight:600, marginTop:4 }}>
+          {showForm ? <><X size={15}/> Tutup</> : <><Plus size={15}/> Catat Penerimaan</>}
+        </button>
+      </div>
+
+      {showForm && (
+        <div className="card pop" style={{ padding:20, marginBottom:16, border:`2px solid ${C.teal}` }}>
+          <div style={{ fontSize:12.5, color:C.sub, marginBottom:14, lineHeight:1.6, background:C.surf, padding:"12px 14px", borderRadius:8 }}>
+            <b>Contoh:</b> 10 siswa bayar paket 3 bulan @Rp 900.000 = Rp 9.000.000 diterima Juli.
+            Isi total Rp 9.000.000, lama 3 bulan. Sistem mencatatnya dulu sebagai <b>kewajiban</b> (belum jadi
+            pendapatan), lalu tiap bulan Anda "akui" Rp 3.000.000 jadi pendapatan sampai habis. Ini sesuai
+            prinsip SAK: pendapatan diakui saat jasa diberikan, bukan saat uang diterima.
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"150px 1fr", gap:12, marginBottom:12 }}>
+            <div><label style={lbl}>Tanggal Terima</label>
+              <input type="date" value={form.received_date} onChange={e=>setForm({...form,received_date:e.target.value})} style={inp} /></div>
+            <div><label style={lbl}>Keterangan</label>
+              <input placeholder="mis. Paket 3 bulan batch Juli" value={form.description}
+                onChange={e=>setForm({...form,description:e.target.value})} style={inp} /></div>
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:14 }}>
+            <div><label style={lbl}>Total Diterima (Rp)</label>
+              <input className="mono" inputMode="numeric" placeholder="9000000" value={form.total_amount}
+                onChange={e=>setForm({...form,total_amount:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
+            <div><label style={lbl}>Diakui selama (bulan)</label>
+              <input className="mono" inputMode="numeric" placeholder="3" value={form.months}
+                onChange={e=>setForm({...form,months:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
+            <div><label style={lbl}>Uang masuk ke</label>
+              <select value={form.cash} onChange={e=>setForm({...form,cash:e.target.value})}
+                style={{ ...inp, fontWeight:600, color:form.cash==="bank"?C.teal:C.kas }}>
+                <option value="bank">Bank BCA</option><option value="kas">Kas</option></select></div>
+          </div>
+          {form.total_amount && form.months && (
+            <div style={{ fontSize:12.5, color:C.teal, fontWeight:600, marginBottom:12 }}>
+              → Akan diakui {money((+form.total_amount||0)/(+form.months||1))}/bulan selama {form.months} bulan
+            </div>
+          )}
+          <button className="btn" onClick={simpan} disabled={busy||!form.total_amount}
+            style={{ width:"100%", padding:"11px", borderRadius:9,
+              background:(form.total_amount&&!busy)?C.teal:C.line, color:"#fff", fontWeight:700, fontSize:14 }}>
+            {busy?"Menyimpan…":"Simpan Penerimaan"}</button>
+        </div>
+      )}
+      {flash && <div className="pop" style={{ textAlign:"center", marginBottom:14,
+        color:flash.startsWith("✓")?C.pos:C.neg, fontSize:13, fontWeight:600 }}>{flash}</div>}
+
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:14, marginBottom:16 }}>
+        <div className="card" style={{ padding:"16px 18px" }}>
+          <div style={{ fontSize:12.5, color:C.sub }}>Total Diterima</div>
+          <div className="mono" style={{ fontSize:19, fontWeight:700, marginTop:6 }}>{money(totalDiterima)}</div></div>
+        <div className="card" style={{ padding:"16px 18px" }}>
+          <div style={{ fontSize:12.5, color:C.sub }}>Sudah Diakui (Pendapatan)</div>
+          <div className="mono" style={{ fontSize:19, fontWeight:700, marginTop:6, color:C.pos }}>{money(totalDiakui)}</div></div>
+        <div className="card" style={{ padding:"16px 18px" }}>
+          <div style={{ fontSize:12.5, color:C.sub }}>Sisa Kewajiban</div>
+          <div className="mono" style={{ fontSize:19, fontWeight:700, marginTop:6, color:C.brass }}>{money(totalSisa)}</div></div>
+      </div>
+
+      <div className="card" style={{ overflow:"hidden" }}>
+        <div style={{ display:"grid", gridTemplateColumns:"1.6fr 110px 80px 110px 110px 120px", padding:"11px 18px",
+          background:C.deep, color:"#DDECEC", fontSize:11.5, fontWeight:600 }}>
+          <span>KETERANGAN</span>
+          <span style={{ textAlign:"right" }}>TOTAL</span>
+          <span style={{ textAlign:"center" }}>/BLN</span>
+          <span style={{ textAlign:"right" }}>DIAKUI</span>
+          <span style={{ textAlign:"right" }}>SISA</span>
+          <span style={{ textAlign:"right" }}>AKSI</span></div>
+        {rows.length===0 && <div style={{ padding:"20px 18px", color:C.sub, fontSize:13 }}>Belum ada. Klik "Catat Penerimaan".</div>}
+        {rows.map(d=>{
+          const belumAkui = Number(d.remaining) > 0.5;
+          const perluAkui = Number(d.months_due) * Number(d.per_month) - Number(d.recognized) > 0.5;
+          return (
+            <div key={d.id} style={{ display:"grid", gridTemplateColumns:"1.6fr 110px 80px 110px 110px 120px",
+              padding:"11px 18px", borderBottom:`1px solid ${C.line}`, fontSize:12.5, alignItems:"center" }}>
+              <span><b style={{ color:C.deep }}>{d.description||"(tanpa keterangan)"}</b>
+                <div style={{ fontSize:10.5, color:C.sub }}>Terima: {d.received_date} · {d.months} bulan</div></span>
+              <span className="mono" style={{ textAlign:"right" }}>{money(Number(d.total_amount))}</span>
+              <span className="mono" style={{ textAlign:"center", color:C.sub, fontSize:11 }}>{money(Number(d.per_month))}</span>
+              <span className="mono" style={{ textAlign:"right", color:C.pos }}>{money(Number(d.recognized))}</span>
+              <span className="mono" style={{ textAlign:"right", fontWeight:700, color:belumAkui?C.brass:C.sub }}>{money(Number(d.remaining))}</span>
+              <span className="no-print" style={{ display:"flex", gap:5, justifyContent:"flex-end", alignItems:"center", paddingLeft:8 }}>
+                {perluAkui && <button className="btn" onClick={()=>akuiSemua(d)} disabled={busy} title="Akui pendapatan jatuh tempo"
+                  style={{ background:C.teal, color:"#fff", fontSize:10, fontWeight:700, padding:"5px 9px", borderRadius:6, whiteSpace:"nowrap" }}>
+                  AKUI</button>}
+                <button className="btn" onClick={()=>hapus(d)} title="Hapus"
+                  style={{ background:"transparent", color:C.sub, display:"grid", placeItems:"center", padding:2 }}><Trash2 size={14} /></button>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ fontSize:11.5, color:C.sub, marginTop:12, lineHeight:1.6 }}>
+        <b>Cara kerja (SAK — pengakuan pendapatan):</b> saat terima uang di muka, dicatat sebagai <b>kewajiban</b>
+        (Pendapatan Diterima di Muka), bukan langsung pendapatan. Tombol <b>AKUI</b> memindahkan porsi bulan yang
+        sudah berjalan menjadi pendapatan riil (Debet "Pendapatan Diterima di Muka", Kredit "Pendapatan").
+        Ini membuat Laba Rugi mencerminkan jasa yang benar-benar sudah diberikan. Catat secara <b>agregat</b>
+        (gabungan banyak siswa), tidak perlu per individu.
+      </div>
+    </div>
+  );
+}
 
 // ============================================================
 // ASET TETAP & PENYUSUTAN (garis lurus, sesuai SAK EMKM)
