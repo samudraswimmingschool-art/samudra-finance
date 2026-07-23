@@ -274,6 +274,13 @@ export async function getAchievement(orgId, year) {
   return data?.[0] || { pendapatan: 0, laba: 0, transaksi: 0 };
 }
 
+// Pencapaian per bulan (untuk detail ketercapaian target tiap bulan)
+export async function getMonthlyAchievement(orgId, year) {
+  const { data, error } = await supabase.rpc("monthly_achievement", { p_org: orgId, p_year: year });
+  if (error) throw error;
+  return data || [];
+}
+
 // ---- Aset Tetap & Penyusutan ----
 export async function getFixedAssets(orgId) {
   const { data, error } = await supabase

@@ -18,7 +18,7 @@ import {
   getMyProfile, getAccounts, getJournal, postJournal, deleteJournal,
   updateJournal, getJournalRange, rpcMonthlyTrend, rpcCashFlowDetail,
   addAccount, deleteAccount, setAccountActive, updateAccount, accountUsedCount,
-  getTarget, saveTarget, getAchievement,
+  getTarget, saveTarget, getAchievement, getMonthlyAchievement,
   getFixedAssets, addFixedAsset, updateFixedAsset, deleteFixedAsset,
   rpcAssetDepreciation, postDepreciation, getDepreciationSchedule,
   postDepreciationMonth, postAllOutstanding,
@@ -1440,6 +1440,7 @@ function TargetView({ orgId }) {
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState("");
   const [edit, setEdit] = useState(false);
+  const [monthly, setMonthly] = useState([]);
 
   const reload = async () => {
     const t = await getTarget(orgId, YEAR);
@@ -1450,6 +1451,7 @@ function TargetView({ orgId }) {
       transaksi: t? String(t.target_transaksi) : "",
     });
     setAch(await getAchievement(orgId, YEAR));
+    try { setMonthly(await getMonthlyAchievement(orgId, YEAR)); } catch(e){ /* RPC belum ada */ }
   };
   useEffect(()=>{ if(orgId) reload(); /* eslint-disable-next-line */ }, [orgId]);
 
@@ -1588,6 +1590,132 @@ function TargetView({ orgId }) {
           </> : "Belum ada transaksi tahun ini untuk dianalisis. Input transaksi dulu."}
         </div>
       </div>
+
+      {/* ===== Detail ketercapaian per bulan ===== */}
+      {monthly.length>0 && (()=>{
+        const tgtBulanan = { p: tP/12, l: tL/12, t: tT/12 };
+        const data = monthly.map(m=>({
+          bulan: Number(m.bulan),
+          nama: MONTHS[Number(m.bulan)-1]?.slice(0,3) || m.bulan,
+          pend: Number(m.pendapatan), laba: Number(m.laba), tx: Number(m.transaksi),
+        }));
+        // hitung kumulatif berjalan
+        let kp=0, kl=0, kt=0;
+        const rows = data.map(d=>{
+          kp+=d.pend; kl+=d.laba; kt+=d.tx;
+          return { ...d, kumP:kp, kumL:kl, kumT:kt,
+            tgtKumP: tgtBulanan.p*d.bulan, tgtKumL: tgtBulanan.l*d.bulan, tgtKumT: tgtBulanan.t*d.bulan };
+        });
+        const adaData = rows.some(r=>r.pend>0||r.tx>0);
+        const chartData = rows.map(r=>({ m:r.nama, Target:Math.round(tgtBulanan.p), Aktual:r.pend }));
+
+        const Status = ({ aktual, target }) => {
+          if (!target) return <span style={{ color:C.line }}>–</span>;
+          const p = aktual/target;
+          const ok = p>=1;
+          return (
+            <span style={{ display:"inline-flex", alignItems:"center", gap:4, fontWeight:700, fontSize:11,
+              color: ok?C.pos : p>=0.8?C.brass : C.neg }}>
+              {ok?"✓":"✗"} {pct(p)}
+            </span>
+          );
+        };
+
+        return (
+          <div style={{ marginTop:16 }}>
+            {/* Grafik target vs aktual */}
+            <div className="card" style={{ padding:"18px 18px 8px", marginBottom:16 }}>
+              <div style={{ fontWeight:600, fontSize:14.5 }}>Target vs Aktual Pendapatan per Bulan</div>
+              <div style={{ fontSize:12, color:C.sub, marginBottom:8 }}>
+                Garis target bulanan: {money(tgtBulanan.p)}</div>
+              <ResponsiveContainer width="100%" height={230}>
+                <BarChart data={chartData} margin={{ left:-18, right:6, top:10 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
+                  <XAxis dataKey="m" tick={{ fontSize:12, fill:C.sub }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize:11, fill:C.sub }} tickFormatter={moneyShort} axisLine={false} tickLine={false} width={54} />
+                  <Tooltip formatter={(v)=>money(v)} contentStyle={{ borderRadius:10, border:`1px solid ${C.line}`, fontSize:12 }} />
+                  <Legend wrapperStyle={{ fontSize:11.5 }} />
+                  <Bar dataKey="Target" fill={C.line} radius={[4,4,0,0]} />
+                  <Bar dataKey="Aktual" radius={[4,4,0,0]}>
+                    {chartData.map((d,i)=><Cell key={i} fill={d.Aktual>=d.Target?C.pos:d.Aktual>0?C.brass:C.line} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Tabel detail per bulan */}
+            <div className="card" style={{ overflow:"hidden" }}>
+              <div style={{ padding:"13px 18px", borderBottom:`1px solid ${C.line}` }}>
+                <div style={{ fontWeight:600, fontSize:14.5 }}>Ketercapaian Target per Bulan</div>
+                <div style={{ fontSize:11.5, color:C.sub, marginTop:2 }}>
+                  Target/bulan — Pendapatan {money(tgtBulanan.p)} · Laba {money(tgtBulanan.l)} · Transaksi {Math.round(tgtBulanan.t)}
+                </div>
+              </div>
+              <div style={{ display:"grid", gridTemplateColumns:"58px repeat(3,1fr) repeat(3,1fr)",
+                padding:"9px 18px", background:C.deep, color:"#DDECEC", fontSize:10.5, fontWeight:600 }}>
+                <span>BULAN</span>
+                <span style={{ textAlign:"right" }}>PENDAPATAN</span>
+                <span style={{ textAlign:"right" }}>LABA</span>
+                <span style={{ textAlign:"center" }}>TRANSAKSI</span>
+                <span style={{ textAlign:"center" }}>≥ TGT PEND</span>
+                <span style={{ textAlign:"center" }}>≥ TGT LABA</span>
+                <span style={{ textAlign:"center" }}>≥ TGT TRX</span>
+              </div>
+              {!adaData && <div style={{ padding:"18px", fontSize:13, color:C.sub }}>Belum ada data transaksi tahun ini.</div>}
+              {adaData && rows.map(r=>{
+                const kosong = r.pend===0 && r.tx===0;
+                return (
+                  <div key={r.bulan} style={{ display:"grid", gridTemplateColumns:"58px repeat(3,1fr) repeat(3,1fr)",
+                    padding:"9px 18px", borderBottom:`1px solid ${C.line}`, fontSize:12, alignItems:"center",
+                    opacity: kosong?0.45:1 }}>
+                    <span style={{ fontWeight:600, color:C.deep }}>{r.nama}</span>
+                    <span className="mono" style={{ textAlign:"right" }}>{r.pend?money(r.pend):"–"}</span>
+                    <span className="mono" style={{ textAlign:"right", color:r.laba<0?C.neg:C.ink }}>{r.laba?money(r.laba):"–"}</span>
+                    <span className="mono" style={{ textAlign:"center" }}>{r.tx||"–"}</span>
+                    <span style={{ textAlign:"center" }}><Status aktual={r.pend} target={tgtBulanan.p} /></span>
+                    <span style={{ textAlign:"center" }}><Status aktual={r.laba} target={tgtBulanan.l} /></span>
+                    <span style={{ textAlign:"center" }}><Status aktual={r.tx} target={tgtBulanan.t} /></span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Tabel kumulatif */}
+            {adaData && (
+              <div className="card" style={{ overflow:"hidden", marginTop:16 }}>
+                <div style={{ padding:"13px 18px", borderBottom:`1px solid ${C.line}` }}>
+                  <div style={{ fontWeight:600, fontSize:14.5 }}>Kumulatif (s/d Bulan Tersebut)</div>
+                  <div style={{ fontSize:11.5, color:C.sub, marginTop:2 }}>
+                    Membandingkan total berjalan dengan target kumulatif — melihat apakah Anda on-track sepanjang tahun</div>
+                </div>
+                <div style={{ display:"grid", gridTemplateColumns:"58px 1fr 1fr 1fr 1fr",
+                  padding:"9px 18px", background:C.deep, color:"#DDECEC", fontSize:10.5, fontWeight:600 }}>
+                  <span>BULAN</span>
+                  <span style={{ textAlign:"right" }}>PENDAPATAN KUM.</span>
+                  <span style={{ textAlign:"right" }}>TARGET KUM.</span>
+                  <span style={{ textAlign:"center" }}>CAPAIAN</span>
+                  <span style={{ textAlign:"center" }}>STATUS</span>
+                </div>
+                {rows.filter(r=>r.kumP>0).map(r=>{
+                  const p = r.tgtKumP ? r.kumP/r.tgtKumP : 0;
+                  const ok = p>=1;
+                  return (
+                    <div key={r.bulan} style={{ display:"grid", gridTemplateColumns:"58px 1fr 1fr 1fr 1fr",
+                      padding:"9px 18px", borderBottom:`1px solid ${C.line}`, fontSize:12, alignItems:"center" }}>
+                      <span style={{ fontWeight:600, color:C.deep }}>{r.nama}</span>
+                      <span className="mono" style={{ textAlign:"right" }}>{money(r.kumP)}</span>
+                      <span className="mono" style={{ textAlign:"right", color:C.sub }}>{money(r.tgtKumP)}</span>
+                      <span className="mono" style={{ textAlign:"center", fontWeight:700, color:ok?C.pos:C.brass }}>{pct(p)}</span>
+                      <span style={{ textAlign:"center", fontSize:11, fontWeight:700, color:ok?C.pos:C.neg }}>
+                        {ok?"✓ On-track":"✗ Tertinggal"}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }
