@@ -1101,10 +1101,15 @@ function Balance({ sheet, retained, period }) {
   const bal = Math.round(totalAset)===Math.round(totalPasiva);
   const label = period==="all"?"Posisi akhir "+YEAR:`Posisi s/d ${MONTHS[period]} ${YEAR}`;
 
-  const Row=({a})=>(<div style={{ display:"grid", gridTemplateColumns:"1fr 170px", padding:"9px 20px",
-    borderBottom:`1px solid ${C.line}`, fontSize:12.5 }}>
-    <span style={{ color:C.sub }}><b style={{ color:C.deep }}>{a.code}</b> {a.name}</span>
-    <span className="mono" style={{ textAlign:"right" }}>{money(Number(a.balance))}</span></div>);
+  const Row=({a})=>{
+    const isKontra = Number(a.balance) < 0;   // kontra-aset (mis. Akumulasi Penyusutan)
+    return (<div style={{ display:"grid", gridTemplateColumns:"1fr 170px", padding:"9px 20px",
+      borderBottom:`1px solid ${C.line}`, fontSize:12.5 }}>
+      <span style={{ color:C.sub, paddingLeft:isKontra?14:0 }}>
+        <b style={{ color:C.deep }}>{a.code}</b> {a.name}</span>
+      <span className="mono" style={{ textAlign:"right", color:isKontra?C.neg:C.ink }}>
+        {money(Number(a.balance))}</span></div>);
+  };
 
   return (
     <div className="pop">
