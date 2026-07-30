@@ -5,7 +5,7 @@ import {
   Search, LogOut, RefreshCw, Wallet, ArrowDownCircle, ArrowUpCircle,
   PiggyBank, ShoppingCart, ChevronLeft, Pencil, BarChart3, X,
   TrendingDown, Lightbulb, Printer, ChevronDown, ChevronUp, Banknote,
-  Target as TargetIcon, FileText, Package, Flag, Clock
+  Target as TargetIcon, FileText, Package, Flag, Clock, UserPlus
 } from "lucide-react";
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -18,7 +18,7 @@ import {
   getMyProfile, getAccounts, getJournal, postJournal, deleteJournal,
   updateJournal, getJournalRange, rpcMonthlyTrend, rpcCashFlowDetail,
   addAccount, deleteAccount, setAccountActive, updateAccount, accountUsedCount,
-  getTarget, saveTarget, getAchievement, getMonthlyAchievement,
+  getTarget, saveTarget, getAchievement, getMonthlyAchievement, getRegistrationGrowth,
   getFixedAssets, addFixedAsset, updateFixedAsset, deleteFixedAsset,
   rpcAssetDepreciation, postDepreciation, getDepreciationSchedule,
   postDepreciationMonth, postAllOutstanding,
@@ -188,6 +188,7 @@ export default function App() {
           {tab==="journal"   && <Journal accounts={accounts} acctById={acctById} acctByCode={acctByCode}
                                           journal={journal} orgId={orgId} onChange={load} />}
           {tab==="analisis"  && <Analisis pnl={pnl} balances={balances} trend={trend} />}
+          {tab==="siswa"     && <PertumbuhanSiswa orgId={orgId} />}
           {tab==="owner"     && <OwnerReport orgId={orgId} orgName={orgName} />}
           {tab==="target"    && <TargetView orgId={orgId} />}
           {tab==="ledger"    && <Ledger balances={balances} />}
@@ -216,6 +217,7 @@ const NAV = [
   { id:"owner", label:"Laporan Owner", icon:FileText },
   { id:"target", label:"Target", icon:TargetIcon },
   { id:"analisis", label:"Analisis Keuangan", icon:BarChart3 },
+  { id:"siswa", label:"Pertumbuhan Siswa", icon:UserPlus },
   { id:"ledger", label:"Buku Besar", icon:Layers },
   { id:"trial", label:"Neraca Saldo", icon:Scale },
   { id:"pnl", label:"Laba Rugi", icon:ScrollText },
@@ -1181,6 +1183,153 @@ function Equity({ orgId, period }) {
       <div style={{ fontSize:12, color:C.sub, marginTop:12, lineHeight:1.5 }}>
         Wakaf & dividen dapat ditambahkan sebagai pengurang setelah laba bersih (jurnal tersendiri di ekuitas).
       </div>
+    </div>
+  );
+}
+
+// ============================================================
+// PERTUMBUHAN SISWA — analisis pendaftaran (dari akun pendaftaran)
+// ============================================================
+function PertumbuhanSiswa({ orgId }) {
+  const [rows, setRows] = useState([]);
+  const [biaya, setBiaya] = useState("");    // biaya pendaftaran per siswa
+  const [loading, setLoading] = useState(true);
+
+  useEffect(()=>{ (async()=>{
+    setLoading(true);
+    try { setRows(await getRegistrationGrowth(orgId, YEAR)); } catch(e){ /* RPC belum ada */ }
+    setLoading(false);
+  })(); /* eslint-disable-next-line */ }, [orgId]);
+
+  const biayaNum = +biaya || 0;
+
+  // agregasi per bulan (gabung cabang)
+  const perBulan = MONTHS.map((nama,i)=>{
+    const bln = i+1;
+    const data = rows.filter(r=>Number(r.bulan)===bln);
+    const pendapatan = data.reduce((s,r)=>s+Number(r.pendapatan),0);
+    const transaksi = data.reduce((s,r)=>s+Number(r.jml_transaksi),0);
+    const prog = data.filter(r=>r.cabang==="Progresif").reduce((s,r)=>s+Number(r.pendapatan),0);
+    const sar = data.filter(r=>r.cabang==="Saraga").reduce((s,r)=>s+Number(r.pendapatan),0);
+    const siswa = biayaNum ? Math.round(pendapatan/biayaNum) : null;
+    return { nama:nama.slice(0,3), bln, pendapatan, transaksi, prog, sar, siswa };
+  });
+  const aktif = perBulan.filter(m=>m.pendapatan>0 || m.transaksi>0);
+
+  const totalPendapatan = perBulan.reduce((s,m)=>s+m.pendapatan,0);
+  const totalTransaksi = perBulan.reduce((s,m)=>s+m.transaksi,0);
+  const totalSiswa = biayaNum ? Math.round(totalPendapatan/biayaNum) : null;
+
+  // pertumbuhan: bandingkan 2 bulan aktif terakhir
+  let growth = null;
+  if (aktif.length>=2) {
+    const a=aktif[aktif.length-2], b=aktif[aktif.length-1];
+    if (a.pendapatan>0) growth = (b.pendapatan-a.pendapatan)/a.pendapatan;
+  }
+
+  const chartData = perBulan.map(m=>({
+    m:m.nama, Pendapatan:m.pendapatan,
+    Siswa: biayaNum ? m.siswa : null,
+  }));
+
+  return (
+    <div className="pop">
+      <PageHead eyebrow="Turunan Otomatis" title="Pertumbuhan Siswa Baru"
+        sub="Analisis pendaftaran dari akun Pendapatan Pendaftaran Siswa Baru" />
+
+      {/* input biaya per siswa */}
+      <div className="card no-print" style={{ padding:"14px 18px", marginBottom:16, display:"flex", alignItems:"center", gap:14, flexWrap:"wrap" }}>
+        <div>
+          <label style={{ ...lbl, marginBottom:4 }}>Biaya pendaftaran per siswa (Rp)</label>
+          <input className="mono" inputMode="numeric" placeholder="mis. 200000" value={biaya}
+            onChange={e=>setBiaya(e.target.value.replace(/\D/g,""))}
+            style={{ ...inp, width:200 }} />
+        </div>
+        <div style={{ fontSize:12, color:C.sub, flex:1, lineHeight:1.5, alignSelf:"flex-end", paddingBottom:8 }}>
+          Isi biaya pendaftaran per siswa, lalu sistem memperkirakan <b>jumlah siswa baru</b> = total pendapatan pendaftaran ÷ biaya per siswa.
+          {!biayaNum && " (kosong = hanya tampilkan pendapatan & transaksi)"}
+        </div>
+      </div>
+
+      {loading && <div className="card" style={{ padding:20, color:C.sub, fontSize:13 }}>Memuat data…</div>}
+
+      {!loading && aktif.length===0 && (
+        <div className="card" style={{ padding:30, textAlign:"center" }}>
+          <UserPlus size={38} color={C.brass} style={{ marginBottom:12 }} />
+          <div style={{ fontSize:15, fontWeight:600, marginBottom:6 }}>Belum ada data pendaftaran</div>
+          <div style={{ fontSize:13, color:C.sub }}>Catat transaksi ke akun "Pendapatan Pendaftaran Siswa Baru" (Transaksi → Terima Pendapatan) untuk melihat analisisnya.</div>
+        </div>
+      )}
+
+      {!loading && aktif.length>0 && <>
+        {/* KPI ringkas */}
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom:16 }}>
+          <div className="card" style={{ padding:"16px 17px" }}>
+            <div style={{ fontSize:12.5, color:C.sub }}>Total Pendapatan Pendaftaran</div>
+            <div className="mono" style={{ fontSize:18, fontWeight:700, marginTop:6, color:C.teal }}>{money(totalPendapatan)}</div></div>
+          <div className="card" style={{ padding:"16px 17px" }}>
+            <div style={{ fontSize:12.5, color:C.sub }}>Total Transaksi Pendaftaran</div>
+            <div className="mono" style={{ fontSize:18, fontWeight:700, marginTop:6 }}>{totalTransaksi}</div></div>
+          <div className="card" style={{ padding:"16px 17px" }}>
+            <div style={{ fontSize:12.5, color:C.sub }}>Estimasi Siswa Baru</div>
+            <div className="mono" style={{ fontSize:18, fontWeight:700, marginTop:6, color:C.brass }}>
+              {totalSiswa!==null ? `${totalSiswa} siswa` : "—"}</div></div>
+          <div className="card" style={{ padding:"16px 17px" }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+              <span style={{ fontSize:12.5, color:C.sub }}>Pertumbuhan Bln Terakhir</span></div>
+            <div className="mono" style={{ fontSize:18, fontWeight:700, marginTop:6,
+              color: growth===null?C.sub : growth>=0?C.pos:C.neg }}>
+              {growth===null ? "—" : (growth>=0?"+":"")+pct(growth)}</div></div>
+        </div>
+
+        {/* Grafik */}
+        <div className="card" style={{ padding:"18px 18px 8px", marginBottom:16 }}>
+          <div style={{ fontWeight:600, fontSize:14.5, marginBottom:2 }}>
+            {biayaNum ? "Tren Siswa Baru per Bulan" : "Tren Pendapatan Pendaftaran per Bulan"}</div>
+          <div style={{ fontSize:12, color:C.sub, marginBottom:8 }}>Sepanjang {YEAR}</div>
+          <ResponsiveContainer width="100%" height={230}>
+            <BarChart data={chartData} margin={{ left:-18, right:6, top:10 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
+              <XAxis dataKey="m" tick={{ fontSize:12, fill:C.sub }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize:11, fill:C.sub }} tickFormatter={biayaNum?undefined:moneyShort} axisLine={false} tickLine={false} width={biayaNum?36:54} />
+              <Tooltip formatter={(v)=> biayaNum ? `${v} siswa` : money(v)} contentStyle={{ borderRadius:10, border:`1px solid ${C.line}`, fontSize:12 }} />
+              <Bar dataKey={biayaNum?"Siswa":"Pendapatan"} radius={[5,5,0,0]} fill={C.teal}>
+                {chartData.map((d,i)=><Cell key={i} fill={C.teal} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Tabel per bulan */}
+        <div className="card" style={{ overflow:"hidden" }}>
+          <div style={{ display:"grid", gridTemplateColumns:`58px 1fr 1fr 110px 110px${biayaNum?" 100px":""}`,
+            padding:"10px 18px", background:C.deep, color:"#DDECEC", fontSize:11, fontWeight:600 }}>
+            <span>BULAN</span>
+            <span style={{ textAlign:"right" }}>PENDAFTARAN PROGRESIF</span>
+            <span style={{ textAlign:"right" }}>PENDAFTARAN SARAGA</span>
+            <span style={{ textAlign:"right" }}>TOTAL</span>
+            <span style={{ textAlign:"center" }}>TRANSAKSI</span>
+            {biayaNum ? <span style={{ textAlign:"center" }}>EST. SISWA</span> : null}
+          </div>
+          {aktif.map(m=>(
+            <div key={m.bln} style={{ display:"grid", gridTemplateColumns:`58px 1fr 1fr 110px 110px${biayaNum?" 100px":""}`,
+              padding:"9px 18px", borderBottom:`1px solid ${C.line}`, fontSize:12.5, alignItems:"center" }}>
+              <span style={{ fontWeight:600, color:C.deep }}>{m.nama}</span>
+              <span className="mono" style={{ textAlign:"right", color:C.sub }}>{m.prog?money(m.prog):"–"}</span>
+              <span className="mono" style={{ textAlign:"right", color:C.sub }}>{m.sar?money(m.sar):"–"}</span>
+              <span className="mono" style={{ textAlign:"right", fontWeight:700, color:C.teal }}>{money(m.pendapatan)}</span>
+              <span className="mono" style={{ textAlign:"center" }}>{m.transaksi}</span>
+              {biayaNum ? <span className="mono" style={{ textAlign:"center", fontWeight:700, color:C.brass }}>{m.siswa}</span> : null}
+            </div>
+          ))}
+        </div>
+        <div style={{ fontSize:11.5, color:C.sub, marginTop:12, lineHeight:1.6 }}>
+          <b>Catatan:</b> analisis ini berbasis transaksi ke akun <b>Pendapatan Pendaftaran Siswa Baru</b> (Progresif & Saraga)
+          di aplikasi keuangan ini. "Estimasi Siswa" dihitung dari total pendapatan pendaftaran ÷ biaya per siswa yang Anda isi,
+          jadi akurat kalau biaya pendaftaran seragam. Untuk data siswa per individu (nama, tanggal daftar), gunakan aplikasi
+          manajemen siswa Anda yang terpisah.
+        </div>
+      </>}
     </div>
   );
 }

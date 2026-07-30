@@ -281,6 +281,13 @@ export async function getMonthlyAchievement(orgId, year) {
   return data || [];
 }
 
+// Analisis pertumbuhan pendaftaran siswa (dari akun pendaftaran)
+export async function getRegistrationGrowth(orgId, year) {
+  const { data, error } = await supabase.rpc("registration_growth", { p_org: orgId, p_year: year });
+  if (error) throw error;
+  return data || [];
+}
+
 // ---- Aset Tetap & Penyusutan ----
 export async function getFixedAssets(orgId) {
   const { data, error } = await supabase
