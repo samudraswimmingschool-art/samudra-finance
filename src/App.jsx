@@ -1399,6 +1399,82 @@ function Analisis({ pnl, balances, trend }) {
     { name:"ROI (Return on Investment)", val:roi, fmt:"pct", target:"≥20%", ok:roi>=0.2, hint:"Laba ÷ modal" },
   ];
 
+  // ===== REKOMENDASI TINDAKAN (rule-based, diprioritaskan) =====
+  // prioritas: 1=mendesak (merah), 2=perhatian (kuning), 3=peluang/positif (hijau)
+  const bankBal = balances.filter(b=>b.code==="1-10002").reduce((s,b)=>s+Number(b.balance),0);
+  const kasBal = balances.filter(b=>b.code==="1-10007").reduce((s,b)=>s+Number(b.balance),0);
+  const hutang = balances.filter(b=>b.type==="Kewajiban").reduce((s,b)=>s+Number(b.balance),0);
+  const aktifTrend = trend.filter(t=>Number(t.pendapatan)>0);
+  let revGrowth = null;
+  if (aktifTrend.length>=2) {
+    const a=Number(aktifTrend[aktifTrend.length-2].pendapatan), b=Number(aktifTrend[aktifTrend.length-1].pendapatan);
+    if (a>0) revGrowth = (b-a)/a;
+  }
+
+  const recs = [];
+  const add = (prio, kategori, judul, aksi) => recs.push({ prio, kategori, judul, aksi });
+
+  if (rev > 0) {
+    // --- KEUANGAN: kas ---
+    if (kasBal < 0)
+      add(1, "Keuangan", "Saldo kas negatif — perlu segera dibereskan",
+        "Kas tercatat minus, artinya ada pengeluaran kas melebihi pemasukannya. Periksa: (1) apakah ada pengeluaran yang seharusnya dari Bank tapi tercatat dari Kas, (2) apakah ada pengisian kas dari Bank yang belum dicatat. Rapikan agar arus kas akurat.");
+    else if (kasBal >= 0 && kasBal < (totalBeban*0.05))
+      add(2, "Keuangan", "Saldo kas tipis",
+        "Petty cash mendekati habis. Pertimbangkan mengisi ulang kas dari Bank agar operasional harian (ATK, air minum, dll) tidak tersendat.");
+
+    // --- KEUANGAN: efisiensi biaya ---
+    if (bebanRatio > 0.85)
+      add(1, "Keuangan", "Beban terlalu besar terhadap pendapatan",
+        `Total beban ${pct(bebanRatio)} dari pendapatan (sehat ≤85%). Tinjau pos beban terbesar. Untuk usaha les, biasanya gaji pelatih pos terbesar — evaluasi rasio pelatih terhadap jumlah siswa agar tiap pelatih mengajar mendekati kapasitas optimal.`);
+    if (coachRatio > 0.5)
+      add(2, "Keuangan", "Biaya pelatih tinggi",
+        `Gaji pelatih ${pct(coachRatio)} dari pendapatan. Pertimbangkan: gabungkan kelas kecil, atur ulang jadwal agar satu sesi pelatih diisi lebih banyak siswa, atau tinjau tarif per jam vs pendapatan per kelas.`);
+
+    // --- KEUANGAN: alokasi laba (kalau sehat) ---
+    if (npm >= 0.15 && laba > 0)
+      add(3, "Keuangan", "Profitabilitas sehat — alokasikan laba dengan bijak",
+        `Margin ${pct(npm)} tergolong sehat. Pertimbangkan mengalokasikan laba ke: (1) dana darurat 3–6 bulan biaya operasional, (2) investasi peralatan untuk menambah kapasitas siswa, (3) cadangan ekspansi. Hindari menahan semua laba menganggur di rekening.`);
+
+    // --- KEUANGAN: hutang ---
+    if (hutang > 0 && laba > 0 && hutang > laba*2)
+      add(2, "Keuangan", "Hutang cukup besar",
+        `Total kewajiban ${money(hutang)} relatif besar dibanding laba periode. Prioritaskan pelunasan hutang berbunga (mis. pinjaman bank) untuk mengurangi beban bunga ke depan.`);
+
+    // --- PERTUMBUHAN: cabang ---
+    if (revP>0 && revS>0) {
+      const effP = kontribP/Math.max(revP,1), effS = kontribS/Math.max(revS,1);
+      const menang = effP>effS ? "Progresif" : "Saraga";
+      const kalah = effP>effS ? "Saraga" : "Progresif";
+      add(3, "Pertumbuhan", `Cabang ${menang} lebih efisien — jadikan model`,
+        `Cabang ${menang} menghasilkan laba lebih besar per rupiah pendapatan. Pelajari apa yang membuatnya unggul (lokasi, pelatih, jadwal, marketing) dan terapkan pola itu di cabang ${kalah}. Fokuskan anggaran marketing ke cabang dengan potensi tertinggi.`);
+    }
+    if (revS===0 && revP>0)
+      add(2, "Pertumbuhan", "Cabang Saraga belum menghasilkan",
+        "Cabang Saraga belum ada pendapatan periode ini. Evaluasi: apakah butuh dorongan marketing, perbaikan jadwal, atau ada kendala operasional yang perlu diatasi.");
+
+    // --- PERTUMBUHAN: tren pendapatan ---
+    if (revGrowth !== null && revGrowth < 0)
+      add(1, "Pertumbuhan", "Pendapatan menurun — perlu dorongan akuisisi siswa",
+        `Pendapatan bulan terakhir turun ${pct(Math.abs(revGrowth))} dari bulan sebelumnya. Pertimbangkan: promo pendaftaran, program referral (siswa ajak teman), konten media sosial rutin, atau kelas trial gratis untuk menarik siswa baru.`);
+    else if (revGrowth !== null && revGrowth > 0.1)
+      add(3, "Pertumbuhan", "Pendapatan tumbuh baik — jaga momentum",
+        `Pendapatan naik ${pct(revGrowth)} dari bulan lalu. Momentum bagus — pertahankan yang sedang berhasil, dan pastikan kapasitas (pelatih, jadwal, kolam) siap menampung pertumbuhan siswa agar kualitas tetap terjaga.`);
+
+    // --- PERTUMBUHAN: marketing umum (kalau margin sehat & belum ada masalah mendesak) ---
+    if (npm >= 0.15)
+      add(3, "Pertumbuhan", "Ada ruang untuk investasi marketing",
+        "Dengan margin sehat, mengalokasikan sebagian laba untuk marketing (iklan lokal, media sosial, kerjasama sekolah/komunitas) berpotensi menambah siswa baru tanpa mengganggu arus kas.");
+  }
+
+  // urutkan berdasarkan prioritas (mendesak dulu)
+  recs.sort((a,b)=>a.prio-b.prio);
+  const prioInfo = {
+    1: { label:"MENDESAK", color:C.neg },
+    2: { label:"PERHATIAN", color:C.brass },
+    3: { label:"PELUANG", color:C.pos },
+  };
+
   return (
     <div className="pop">
       <PageHead eyebrow="Turunan Otomatis" title="Analisis Keuangan"
@@ -1422,6 +1498,39 @@ function Analisis({ pnl, balances, trend }) {
           })}
         </div>
       </div>
+
+      {/* Rekomendasi Tindakan */}
+      {recs.length>0 && (
+        <div className="card" style={{ padding:"18px 20px", marginBottom:16 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
+            <TargetIcon size={18} color={C.teal} />
+            <span style={{ fontWeight:700, fontSize:15 }}>Rekomendasi Tindakan untuk Owner</span>
+          </div>
+          <div style={{ fontSize:12, color:C.sub, marginBottom:14 }}>
+            Saran konkret berdasarkan kondisi keuangan Anda — diurutkan dari yang paling mendesak.
+          </div>
+          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+            {recs.map((r,i)=>{
+              const info = prioInfo[r.prio];
+              return (
+                <div key={i} style={{ borderRadius:10, border:`1px solid ${C.line}`, borderLeft:`4px solid ${info.color}`, padding:"12px 15px" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:5, flexWrap:"wrap" }}>
+                    <span style={{ fontSize:9.5, fontWeight:700, letterSpacing:".05em", padding:"2px 8px",
+                      borderRadius:20, background:info.color+"18", color:info.color }}>{info.label}</span>
+                    <span style={{ fontSize:10.5, fontWeight:600, color:C.sub, textTransform:"uppercase", letterSpacing:".04em" }}>{r.kategori}</span>
+                    <span style={{ fontSize:13.5, fontWeight:700, color:C.deep }}>{r.judul}</span>
+                  </div>
+                  <div style={{ fontSize:12.5, color:C.ink, lineHeight:1.6 }}>{r.aksi}</div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ fontSize:11, color:C.sub, marginTop:14, lineHeight:1.5, fontStyle:"italic" }}>
+            Rekomendasi ini dibuat otomatis dari pola angka keuangan Anda sebagai bahan pertimbangan, bukan nasihat finansial profesional.
+            Untuk keputusan besar (ekspansi, pinjaman, investasi), pertimbangkan juga masukan akuntan atau penasihat bisnis.
+          </div>
+        </div>
+      )}
 
       {/* Rasio */}
       <div className="card" style={{ padding:"18px 20px", marginBottom:16 }}>
