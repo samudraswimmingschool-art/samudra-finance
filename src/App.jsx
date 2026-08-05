@@ -29,6 +29,7 @@ import {
   periodRange, signOut,
 } from "./lib/api";
 
+const YEAR = 2026;
 
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined=loading
@@ -36,7 +37,6 @@ export default function App() {
   const [accounts, setAccounts] = useState([]);
   const [tab, setTab] = useState("dashboard");
   const [period, setPeriod] = useState("all");
-  const [YEAR, setYEAR] = useState(2026);
   const [loading, setLoading] = useState(false);
 
   // laporan aktif (di-load sesuai tab & period)
