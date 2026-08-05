@@ -1234,8 +1234,15 @@ function PertumbuhanSiswa({ orgId }) {
 
   return (
     <div className="pop">
-      <PageHead eyebrow="Turunan Otomatis" title="Pertumbuhan Siswa Baru"
-        sub="Analisis pendaftaran dari akun Pendapatan Pendaftaran Siswa Baru" />
+<div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+        <PageHead eyebrow="Turunan Otomatis" title="Pertumbuhan Siswa Baru"
+          sub="Analisis pendaftaran dari akun Pendapatan Pendaftaran Siswa Baru" />
+        <button className="btn no-print" onClick={()=>window.print()}
+          style={{ display:"flex", alignItems:"center", gap:6, background:C.deep, color:"#fff",
+            padding:"9px 14px", borderRadius:9, fontSize:12.5, fontWeight:600, marginTop:4 }}>
+          <Printer size={14} /> Simpan PDF
+        </button>
+      </div>
 
       {/* input biaya per siswa */}
       <div className="card no-print" style={{ padding:"14px 18px", marginBottom:16, display:"flex", alignItems:"center", gap:14, flexWrap:"wrap" }}>
