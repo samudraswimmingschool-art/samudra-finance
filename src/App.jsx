@@ -187,7 +187,7 @@ export default function App() {
                                           journal={journal} acctById={acctById} orgId={orgId} onChange={load} />}
           {tab==="journal"   && <Journal accounts={accounts} acctById={acctById} acctByCode={acctByCode}
                                           journal={journal} orgId={orgId} onChange={load} />}
-          {tab==="analisis"  && <Analisis pnl={pnl} balances={balances} trend={trend} />}
+          {tab==="analisis"  && <Analisis pnl={pnl} balances={balances} trend={trend} period={period} />}
           {tab==="siswa"     && <PertumbuhanSiswa orgId={orgId} />}
           {tab==="owner"     && <OwnerReport orgId={orgId} orgName={orgName} />}
           {tab==="target"    && <TargetView orgId={orgId} />}
@@ -1337,7 +1337,7 @@ function PertumbuhanSiswa({ orgId }) {
 // ============================================================
 // ANALISIS KEUANGAN — rasio, tren, per cabang, insight otomatis
 // ============================================================
-function Analisis({ pnl, balances, trend }) {
+function Analisis({ pnl, balances, trend, period }) {
   const S = (type,branch) => pnl.filter(r=>r.type===type&&(!branch||r.branch===branch))
     .reduce((s,r)=>s+Number(r.amount),0);
   const rev=S("Pendapatan"), revP=S("Pendapatan","Progresif"), revS=S("Pendapatan","Saraga");
@@ -1376,13 +1376,25 @@ function Analisis({ pnl, balances, trend }) {
     }
     if (revS===0 && revP>0) insights.push({ t:"info", m:"Cabang Saraga belum ada pendapatan periode ini. Bandingkan setelah keduanya aktif." });
 
-    // tren: bandingkan 2 bulan terakhir yang ada data
-    const aktif = trend.filter(t=>Number(t.pendapatan)>0);
-    if (aktif.length>=2) {
-      const a=aktif[aktif.length-2], b=aktif[aktif.length-1];
-      const delta=(Number(b.laba)-Number(a.laba));
-      if (delta<0) insights.push({ t:"warn", m:`Laba bulan terakhir turun ${money(Math.abs(delta))} dibanding bulan sebelumnya. Cek kenaikan beban atau penurunan pendapatan.` });
-      else insights.push({ t:"good", m:`Laba bulan terakhir naik ${money(delta)} dibanding bulan sebelumnya. Tren positif.` });
+// tren: bandingkan bulan yang dipilih vs bulan sebelumnya (urut numerik, aman)
+    const byMonth = [...trend]
+      .map(t=>({ ...t, bln:Number(t.bulan) }))
+      .sort((a,b)=>a.bln-b.bln);
+    // "bulan ini" = bulan yang dipilih di tab; kalau "Semua", pakai bulan aktif terakhir
+    const bulanIni = period==="all"
+      ? byMonth.filter(t=>Number(t.pendapatan)>0 || Number(t.beban)>0).slice(-1)[0]?.bln
+      : period+1;
+    if (bulanIni) {
+      const cur = byMonth.find(t=>t.bln===bulanIni);
+      // bulan pembanding: bulan aktif terakhir SEBELUM bulanIni
+      const prev = byMonth.filter(t=>t.bln<bulanIni &&
+        (Number(t.pendapatan)>0 || Number(t.beban)>0)).slice(-1)[0];
+      if (cur && prev) {
+        const delta = Number(cur.laba) - Number(prev.laba);
+        const namaCur = MONTHS[bulanIni-1], namaPrev = MONTHS[prev.bln-1];
+        if (delta < 0) insights.push({ t:"warn", m:`Laba ${namaCur} turun ${money(Math.abs(delta))} dibanding ${namaPrev}. Cek kenaikan beban atau penurunan pendapatan.` });
+        else insights.push({ t:"good", m:`Laba ${namaCur} naik ${money(delta)} dibanding ${namaPrev}. Tren positif.` });
+      }
     }
   }
 
@@ -1404,11 +1416,16 @@ function Analisis({ pnl, balances, trend }) {
   const bankBal = balances.filter(b=>b.code==="1-10002").reduce((s,b)=>s+Number(b.balance),0);
   const kasBal = balances.filter(b=>b.code==="1-10007").reduce((s,b)=>s+Number(b.balance),0);
   const hutang = balances.filter(b=>b.type==="Kewajiban").reduce((s,b)=>s+Number(b.balance),0);
-  const aktifTrend = trend.filter(t=>Number(t.pendapatan)>0);
+const byMonthRev = [...trend].map(t=>({ ...t, bln:Number(t.bulan) })).sort((a,b)=>a.bln-b.bln);
+  const bulanIniRev = period==="all"
+    ? byMonthRev.filter(t=>Number(t.pendapatan)>0).slice(-1)[0]?.bln
+    : period+1;
   let revGrowth = null;
-  if (aktifTrend.length>=2) {
-    const a=Number(aktifTrend[aktifTrend.length-2].pendapatan), b=Number(aktifTrend[aktifTrend.length-1].pendapatan);
-    if (a>0) revGrowth = (b-a)/a;
+  if (bulanIniRev) {
+    const cur = byMonthRev.find(t=>t.bln===bulanIniRev);
+    const prev = byMonthRev.filter(t=>t.bln<bulanIniRev && Number(t.pendapatan)>0).slice(-1)[0];
+    if (cur && prev && Number(prev.pendapatan)>0)
+      revGrowth = (Number(cur.pendapatan)-Number(prev.pendapatan))/Number(prev.pendapatan);
   }
 
   const recs = [];
