@@ -131,14 +131,6 @@ export default function App() {
             <div><div style={{ fontWeight:700, fontSize:15, lineHeight:1 }}>Samudra</div>
               <div style={{ fontSize:11, color:C.brass, letterSpacing:".08em", marginTop:3 }}>FINANCE</div></div>
           </div>
-          <div className="no-print" style={{ padding:"0 8px 12px" }}>
-            <label style={{ fontSize:10, letterSpacing:".08em", color:"#5F8080", fontWeight:700, display:"block", marginBottom:5 }}>TAHUN BUKU</label>
-            <select value={YEAR} onChange={e=>setYEAR(+e.target.value)}
-              style={{ width:"100%", background:C.teal, color:"#fff", border:"none", borderRadius:8,
-                padding:"8px 10px", fontSize:13.5, fontWeight:700, fontFamily:"inherit", cursor:"pointer" }}>
-              {[2025, 2026, 2027].map(y=><option key={y} value={y} style={{ color:C.ink }}>{y}</option>)}
-            </select>
-          </div>
           <div style={{ flex:1, overflowY:"auto" }}>
             {NAV.map((n, i) => n.sec ? (
               <div key={"s"+i} style={{ fontSize:10, letterSpacing:".12em", color:"#5F8080",
