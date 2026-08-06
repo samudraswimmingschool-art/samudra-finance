@@ -1494,21 +1494,23 @@ function Equity({ orgId, period }) {
 // ============================================================
 function PertumbuhanSiswa({ orgId }) {
   const [rows, setRows] = useState([]);
+  const [rowsPrev, setRowsPrev] = useState([]);   // data tahun sebelumnya
   const [biaya, setBiaya] = useState("");    // biaya pendaftaran per siswa
   const [loading, setLoading] = useState(true);
 
   useEffect(()=>{ (async()=>{
     setLoading(true);
     try { setRows(await getRegistrationGrowth(orgId, YEAR)); } catch(e){ /* RPC belum ada */ }
+    try { setRowsPrev(await getRegistrationGrowth(orgId, YEAR-1)); } catch(e){ setRowsPrev([]); }
     setLoading(false);
   })(); /* eslint-disable-next-line */ }, [orgId]);
 
   const biayaNum = +biaya || 0;
 
-  // agregasi per bulan (gabung cabang)
-  const perBulan = MONTHS.map((nama,i)=>{
+  // agregasi per bulan (gabung cabang) — dipakai untuk tahun manapun
+  const agregasi = (src) => MONTHS.map((nama,i)=>{
     const bln = i+1;
-    const data = rows.filter(r=>Number(r.bulan)===bln);
+    const data = (src||[]).filter(r=>Number(r.bulan)===bln);
     const pendapatan = data.reduce((s,r)=>s+Number(r.pendapatan),0);
     const transaksi = data.reduce((s,r)=>s+Number(r.jml_transaksi),0);
     const prog = data.filter(r=>r.cabang==="Progresif").reduce((s,r)=>s+Number(r.pendapatan),0);
@@ -1516,11 +1518,24 @@ function PertumbuhanSiswa({ orgId }) {
     const siswa = biayaNum ? Math.round(pendapatan/biayaNum) : null;
     return { nama:nama.slice(0,3), bln, pendapatan, transaksi, prog, sar, siswa };
   });
+
+  const perBulan = agregasi(rows);
+  const perBulanPrev = agregasi(rowsPrev);
   const aktif = perBulan.filter(m=>m.pendapatan>0 || m.transaksi>0);
 
   const totalPendapatan = perBulan.reduce((s,m)=>s+m.pendapatan,0);
   const totalTransaksi = perBulan.reduce((s,m)=>s+m.transaksi,0);
   const totalSiswa = biayaNum ? Math.round(totalPendapatan/biayaNum) : null;
+
+  // total tahun sebelumnya + pertumbuhan tahunan
+  const totalPendapatanPrev = perBulanPrev.reduce((s,m)=>s+m.pendapatan,0);
+  const totalTransaksiPrev = perBulanPrev.reduce((s,m)=>s+m.transaksi,0);
+  const totalSiswaPrev = biayaNum ? Math.round(totalPendapatanPrev/biayaNum) : null;
+  const adaTahunLalu = totalPendapatanPrev>0 || totalTransaksiPrev>0;
+  const yoyPendapatan = deltaPct(totalPendapatan, totalPendapatanPrev);
+  const yoyTransaksi = deltaPct(totalTransaksi, totalTransaksiPrev);
+  const yoySiswa = (totalSiswa!==null && totalSiswaPrev!==null)
+    ? deltaPct(totalSiswa, totalSiswaPrev) : null;
 
   // pertumbuhan: bandingkan 2 bulan aktif terakhir
   let growth = null;
@@ -1533,6 +1548,18 @@ function PertumbuhanSiswa({ orgId }) {
     m:m.nama, Pendapatan:m.pendapatan,
     Siswa: biayaNum ? m.siswa : null,
   }));
+
+  // data grafik perbandingan dua tahun
+  const chartYoY = perBulan.map((m,i)=>{
+    const p = perBulanPrev[i];
+    return biayaNum
+      ? { m:m.nama, [`${YEAR-1}`]: p.siswa||0, [`${YEAR}`]: m.siswa||0 }
+      : { m:m.nama, [`${YEAR-1}`]: p.pendapatan, [`${YEAR}`]: m.pendapatan };
+  });
+  const bulanGabung = perBulan
+    .map((m,i)=>({ ...m, prevPendapatan:perBulanPrev[i].pendapatan,
+      prevTransaksi:perBulanPrev[i].transaksi, prevSiswa:perBulanPrev[i].siswa }))
+    .filter(m=>m.pendapatan>0 || m.transaksi>0 || m.prevPendapatan>0 || m.prevTransaksi>0);
 
   return (
     <div className="pop">
@@ -1575,21 +1602,126 @@ function PertumbuhanSiswa({ orgId }) {
         <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom:16 }}>
           <div className="card" style={{ padding:"16px 17px" }}>
             <div style={{ fontSize:12.5, color:C.sub }}>Total Pendapatan Pendaftaran</div>
-            <div className="mono" style={{ fontSize:18, fontWeight:700, marginTop:6, color:C.teal }}>{money(totalPendapatan)}</div></div>
+            <div className="mono" style={{ fontSize:18, fontWeight:700, marginTop:6, color:C.teal }}>{money(totalPendapatan)}</div>
+            {adaTahunLalu && (
+              <div style={{ display:"flex", alignItems:"center", gap:6, marginTop:7, paddingTop:7,
+                borderTop:`1px solid ${C.line}` }}>
+                <span style={{ fontSize:10.5, color:C.sub }}>vs {YEAR-1}</span>
+                <YoYBadge g={yoyPendapatan} />
+                <span className="mono" style={{ fontSize:10.5, color:C.sub, marginLeft:"auto" }}>
+                  {moneyShort(totalPendapatanPrev)}</span>
+              </div>
+            )}
+          </div>
           <div className="card" style={{ padding:"16px 17px" }}>
             <div style={{ fontSize:12.5, color:C.sub }}>Total Transaksi Pendaftaran</div>
-            <div className="mono" style={{ fontSize:18, fontWeight:700, marginTop:6 }}>{totalTransaksi}</div></div>
+            <div className="mono" style={{ fontSize:18, fontWeight:700, marginTop:6 }}>{totalTransaksi}</div>
+            {adaTahunLalu && (
+              <div style={{ display:"flex", alignItems:"center", gap:6, marginTop:7, paddingTop:7,
+                borderTop:`1px solid ${C.line}` }}>
+                <span style={{ fontSize:10.5, color:C.sub }}>vs {YEAR-1}</span>
+                <YoYBadge g={yoyTransaksi} />
+                <span className="mono" style={{ fontSize:10.5, color:C.sub, marginLeft:"auto" }}>
+                  {totalTransaksiPrev}</span>
+              </div>
+            )}
+          </div>
           <div className="card" style={{ padding:"16px 17px" }}>
             <div style={{ fontSize:12.5, color:C.sub }}>Estimasi Siswa Baru</div>
             <div className="mono" style={{ fontSize:18, fontWeight:700, marginTop:6, color:C.brass }}>
-              {totalSiswa!==null ? `${totalSiswa} siswa` : "—"}</div></div>
+              {totalSiswa!==null ? `${totalSiswa} siswa` : "—"}</div>
+            {adaTahunLalu && totalSiswaPrev!==null && (
+              <div style={{ display:"flex", alignItems:"center", gap:6, marginTop:7, paddingTop:7,
+                borderTop:`1px solid ${C.line}` }}>
+                <span style={{ fontSize:10.5, color:C.sub }}>vs {YEAR-1}</span>
+                <YoYBadge g={yoySiswa} />
+                <span className="mono" style={{ fontSize:10.5, color:C.sub, marginLeft:"auto" }}>
+                  {totalSiswaPrev} siswa</span>
+              </div>
+            )}
+          </div>
           <div className="card" style={{ padding:"16px 17px" }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
               <span style={{ fontSize:12.5, color:C.sub }}>Pertumbuhan Bln Terakhir</span></div>
             <div className="mono" style={{ fontSize:18, fontWeight:700, marginTop:6,
               color: growth===null?C.sub : growth>=0?C.pos:C.neg }}>
-              {growth===null ? "—" : (growth>=0?"+":"")+pct(growth)}</div></div>
+              {growth===null ? "—" : (growth>=0?"+":"")+pct(growth)}</div>
+            <div style={{ fontSize:10.5, color:C.sub, marginTop:7, paddingTop:7,
+              borderTop:`1px solid ${C.line}` }}>Bulan aktif terakhir vs sebelumnya</div>
+          </div>
         </div>
+
+        {/* Perbandingan tahun */}
+        {adaTahunLalu ? (
+          <div className="card" style={{ padding:"18px 20px", marginBottom:16 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
+              <ArrowLeftRight size={18} color={C.brass} />
+              <span style={{ fontWeight:700, fontSize:15 }}>Perbandingan Tahun — {YEAR} vs {YEAR-1}</span>
+            </div>
+            <div style={{ fontSize:12, color:C.sub, marginBottom:14 }}>
+              {biayaNum ? "Estimasi siswa baru" : "Pendapatan pendaftaran"} per bulan di kedua tahun
+            </div>
+
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={chartYoY} margin={{ left:-18, right:6, top:10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
+                <XAxis dataKey="m" tick={{ fontSize:12, fill:C.sub }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize:11, fill:C.sub }} tickFormatter={biayaNum?undefined:moneyShort}
+                  axisLine={false} tickLine={false} width={biayaNum?36:54} />
+                <Tooltip formatter={(v)=> biayaNum ? `${v} siswa` : money(v)}
+                  contentStyle={{ borderRadius:10, border:`1px solid ${C.line}`, fontSize:12 }} />
+                <Legend wrapperStyle={{ fontSize:11.5 }} />
+                <Bar dataKey={`${YEAR-1}`} fill={C.line} radius={[4,4,0,0]} />
+                <Bar dataKey={`${YEAR}`} fill={C.teal} radius={[4,4,0,0]} />
+              </BarChart>
+            </ResponsiveContainer>
+
+            {/* Tabel per bulan dua tahun */}
+            <div style={{ marginTop:16, border:`1px solid ${C.line}`, borderRadius:12, overflow:"hidden" }}>
+              <div style={{ display:"grid", gridTemplateColumns:"58px 1fr 1fr 90px 90px 90px",
+                padding:"9px 14px", background:C.deep, color:"#DDECEC", fontSize:10.5, fontWeight:600 }}>
+                <span>BULAN</span>
+                <span style={{ textAlign:"right" }}>PENDAFTARAN {YEAR-1}</span>
+                <span style={{ textAlign:"right" }}>PENDAFTARAN {YEAR}</span>
+                <span style={{ textAlign:"center" }}>±</span>
+                <span style={{ textAlign:"center" }}>TRX {YEAR-1}</span>
+                <span style={{ textAlign:"center" }}>TRX {YEAR}</span>
+              </div>
+              {bulanGabung.map(m=>{
+                const g = deltaPct(m.pendapatan, m.prevPendapatan);
+                return (
+                  <div key={m.bln} style={{ display:"grid", gridTemplateColumns:"58px 1fr 1fr 90px 90px 90px",
+                    padding:"8px 14px", borderBottom:`1px solid ${C.line}`, fontSize:12, alignItems:"center" }}>
+                    <span style={{ fontWeight:600, color:C.deep }}>{m.nama}</span>
+                    <span className="mono" style={{ textAlign:"right", color:C.sub }}>
+                      {m.prevPendapatan?money(m.prevPendapatan):"–"}</span>
+                    <span className="mono" style={{ textAlign:"right", fontWeight:600, color:C.teal }}>
+                      {m.pendapatan?money(m.pendapatan):"–"}</span>
+                    <span style={{ textAlign:"center" }}><YoYBadge g={g} /></span>
+                    <span className="mono" style={{ textAlign:"center", color:C.sub }}>{m.prevTransaksi||"–"}</span>
+                    <span className="mono" style={{ textAlign:"center", fontWeight:600 }}>{m.transaksi||"–"}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ fontSize:11, color:C.sub, marginTop:10, lineHeight:1.5 }}>
+              Persentase tidak muncul kalau bulan pembanding di {YEAR-1} masih nol — pertumbuhan dari
+              nol tidak bisa dihitung. Isi biaya pendaftaran di atas untuk membandingkan jumlah siswa,
+              bukan hanya rupiah.
+            </div>
+          </div>
+        ) : (
+          <div className="card" style={{ padding:"16px 20px", marginBottom:16 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
+              <ArrowLeftRight size={18} color={C.brass} />
+              <span style={{ fontWeight:700, fontSize:14.5 }}>Perbandingan Tahun</span>
+            </div>
+            <div style={{ fontSize:12.5, color:C.sub, lineHeight:1.6 }}>
+              Belum ada data pendaftaran tahun {YEAR-1}. Setelah transaksi pendaftaran tahun sebelumnya
+              dimasukkan, bagian ini otomatis menampilkan perbandingan pertumbuhan siswa antar tahun.
+            </div>
+          </div>
+        )}
 
         {/* Grafik */}
         <div className="card" style={{ padding:"18px 18px 8px", marginBottom:16 }}>
