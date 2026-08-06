@@ -67,6 +67,9 @@ export default function App() {
   const [flow, setFlow] = useState([]);
   const [flowDetail, setFlowDetail] = useState([]);
   const [trend, setTrend] = useState([]);
+  // data tahun sebelumnya (untuk perbandingan tahun / YoY)
+  const [pnlPrev, setPnlPrev] = useState([]);
+  const [trendPrev, setTrendPrev] = useState([]);
 
   // --- auth session ---
   useEffect(() => {
@@ -106,21 +109,24 @@ export default function App() {
       if (tab === "journal" || tab === "transaksi") setJournal(await getJournal(orgId, start, end));
       else if (tab === "ledger" || tab === "trial")
         setBalances(await rpcAccountBalances(orgId, start, end));
-      else if (tab === "pnl") setPnl(await rpcPnl(orgId, start, end));
+      else if (tab === "pnl") {
+        setPnl(await rpcPnl(orgId, start, end));
+        const [pS, pE] = periodRange(YEAR-1, period);
+        setPnlPrev(await rpcPnl(orgId, pS, pE));
+      }
       else if (tab === "balance") {
         setSheet(await rpcBalanceSheet(orgId, asOf));
         setRetained(await rpcRetainedProfit(orgId, asOf));
       } else if (tab === "cashflow") {
         setFlow(await rpcCashFlow(orgId, start, end));
         setFlowDetail(await rpcCashFlowDetail(orgId, start, end));
-      } else if (tab === "analisis") {
+      } else if (tab === "analisis" || tab === "dashboard") {
+        const [pS, pE] = periodRange(YEAR-1, period);
         setPnl(await rpcPnl(orgId, start, end));
         setBalances(await rpcAccountBalances(orgId, start, end));
         setTrend(await rpcMonthlyTrend(orgId, YEAR));
-      } else if (tab === "dashboard") {
-        setPnl(await rpcPnl(orgId, start, end));
-        setBalances(await rpcAccountBalances(orgId, start, end));
-        setTrend(await rpcMonthlyTrend(orgId, YEAR));
+        setPnlPrev(await rpcPnl(orgId, pS, pE));
+        setTrendPrev(await rpcMonthlyTrend(orgId, YEAR-1));
       }
     } catch (e) { alert("Gagal memuat: " + e.message); }
     finally { setLoading(false); }
@@ -216,18 +222,20 @@ export default function App() {
           )}
 
           <div id="print-area">
-          {tab==="dashboard" && <Dashboard pnl={pnl} balances={balances} trend={trend} />}
+          {tab==="dashboard" && <Dashboard pnl={pnl} balances={balances} trend={trend}
+                                          pnlPrev={pnlPrev} trendPrev={trendPrev} />}
           {tab==="transaksi" && <Transaksi key={yearTick} accounts={accounts} acctByCode={acctByCode}
                                           journal={journal} acctById={acctById} orgId={orgId} onChange={load} />}
           {tab==="journal"   && <Journal key={yearTick} accounts={accounts} acctById={acctById} acctByCode={acctByCode}
                                           journal={journal} orgId={orgId} onChange={load} />}
-          {tab==="analisis"  && <Analisis pnl={pnl} balances={balances} trend={trend} period={period} />}
+          {tab==="analisis"  && <Analisis pnl={pnl} balances={balances} trend={trend} period={period}
+                                          pnlPrev={pnlPrev} trendPrev={trendPrev} />}
           {tab==="siswa"     && <PertumbuhanSiswa key={yearTick} orgId={orgId} />}
           {tab==="owner"     && <OwnerReport key={yearTick} orgId={orgId} orgName={orgName} />}
           {tab==="target"    && <TargetView key={yearTick} orgId={orgId} />}
           {tab==="ledger"    && <Ledger balances={balances} />}
           {tab==="trial"     && <Trial balances={balances} />}
-          {tab==="pnl"       && <PnL pnl={pnl} period={period} />}
+          {tab==="pnl"       && <PnL pnl={pnl} pnlPrev={pnlPrev} period={period} />}
           {tab==="balance"   && <Balance sheet={sheet} retained={retained} period={period} />}
           {tab==="equity"    && <Equity key={yearTick} orgId={orgId} period={period} />}
           {tab==="cashflow"  && <CashFlow flow={flow} detail={flowDetail} />}
@@ -290,10 +298,196 @@ function PageHead({ eyebrow, title, sub }) {
 /* ---- helpers untuk agregasi hasil RPC ---- */
 const sumBy = (rows, pred) => rows.filter(pred).reduce((s,r)=>s+Number(r.amount||r.balance||0),0);
 
+/* ---- ringkasan Laba Rugi dari hasil rpcPnl (dipakai untuk YoY) ---- */
+function ringkasPnl(rows) {
+  const S = (type,branch) => (rows||[]).filter(r=>r.type===type&&(!branch||r.branch===branch))
+    .reduce((s,r)=>s+Number(r.amount),0);
+  const rev=S("Pendapatan"), revP=S("Pendapatan","Progresif"), revS=S("Pendapatan","Saraga");
+  const cogs=S("COGS"), opBank=S("Beban Op"), opP=S("Beban Op","Progresif"), opS=S("Beban Op","Saraga");
+  const kasBeban=S("Beban Kas"), oi=S("Other Income"), oe=S("Other Expense");
+  const totalBeban=cogs+opBank+kasBeban+oe;
+  const laba=rev-totalBeban+oi;
+  return { rev, revP, revS, cogs, opBank, opP, opS, kasBeban, oi, oe, totalBeban, laba,
+    npm: rev ? laba/rev : 0 };
+}
+
+/* ---- selisih relatif yang aman terhadap pembagi nol ---- */
+function deltaPct(now, before) {
+  if (!before) return null;           // tidak ada pembanding → jangan tampilkan %
+  return (now - before) / Math.abs(before);
+}
+
+/* ---- badge naik/turun untuk perbandingan ---- */
+const YoYBadge = ({ g, terbalik }) => {
+  // terbalik=true untuk metrik yang "naik = buruk" (mis. beban)
+  if (g === null || g === undefined) return <span style={{ fontSize:11, color:C.sub }}>—</span>;
+  const naik = g >= 0;
+  const bagus = terbalik ? !naik : naik;
+  return (
+    <span style={{ display:"inline-flex", alignItems:"center", gap:3, fontSize:11.5, fontWeight:700,
+      color: bagus ? C.pos : C.neg }}>
+      {naik ? <TrendingUp size={13}/> : <TrendingDown size={13}/>}{naik?"+":""}{pct(g)}
+    </span>
+  );
+};
+
+/* ============================================================
+   PERBANDINGAN TAHUN (YoY) — dipakai di Analisis & Laba Rugi
+   ============================================================ */
+function PerbandinganTahun({ pnl, pnlPrev, trend, trendPrev, period, ringkas }) {
+  const kini = ringkasPnl(pnl);
+  const lalu = ringkasPnl(pnlPrev);
+  const adaPembanding = lalu.rev > 0 || lalu.totalBeban > 0;
+  const labelPeriode = period==="all" ? "Setahun penuh" : `Bulan ${MONTHS[period]}`;
+
+  const baris = [
+    { l:"Pendapatan",    a:kini.rev,        b:lalu.rev,        terbalik:false },
+    { l:"Total Beban",   a:kini.totalBeban, b:lalu.totalBeban, terbalik:true  },
+    { l:"Laba Bersih",   a:kini.laba,       b:lalu.laba,       terbalik:false },
+  ];
+
+  // gabung tren dua tahun untuk grafik & tabel per bulan
+  const peta = (arr) => {
+    const m = {};
+    (arr||[]).forEach(t=>{ m[Number(t.bulan)] = t; });
+    return m;
+  };
+  const mKini = peta(trend), mLalu = peta(trendPrev);
+  const perBulan = MONTHS.map((nama,i)=>{
+    const b = i+1;
+    const k = mKini[b], l = mLalu[b];
+    return {
+      m: nama.slice(0,3), bln: b,
+      revKini: k?Number(k.pendapatan):0, revLalu: l?Number(l.pendapatan):0,
+      labaKini: k?Number(k.laba):0,      labaLalu: l?Number(l.laba):0,
+    };
+  });
+  const adaDataBulanan = perBulan.some(r=>r.revKini||r.revLalu);
+  const bulanTampil = perBulan.filter(r=>r.revKini||r.revLalu);
+
+  const chartData = perBulan.map(r=>({
+    m: r.m, [`${YEAR-1}`]: r.revLalu, [`${YEAR}`]: r.revKini,
+  }));
+
+  if (!adaPembanding && !adaDataBulanan) {
+    return (
+      <div className="card" style={{ padding:"18px 20px", marginBottom:16 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+          <ArrowLeftRight size={18} color={C.brass} />
+          <span style={{ fontWeight:700, fontSize:15 }}>Perbandingan Tahun</span>
+        </div>
+        <div style={{ fontSize:13, color:C.sub, lineHeight:1.6 }}>
+          Belum ada data tahun {YEAR-1} untuk dibandingkan. Setelah transaksi tahun sebelumnya
+          dimasukkan, bagian ini otomatis menampilkan pertumbuhan tahun-ke-tahun.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card" style={{ padding:"18px 20px", marginBottom:16 }}>
+      <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
+        <ArrowLeftRight size={18} color={C.brass} />
+        <span style={{ fontWeight:700, fontSize:15 }}>Perbandingan Tahun — {YEAR} vs {YEAR-1}</span>
+      </div>
+      <div style={{ fontSize:12, color:C.sub, marginBottom:14 }}>
+        {labelPeriode} · membandingkan periode yang sama di kedua tahun
+      </div>
+
+      {/* Ringkasan tiga metrik utama */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:12, marginBottom:16 }}>
+        {baris.map(r=>{
+          const g = deltaPct(r.a, r.b);
+          return (
+            <div key={r.l} style={{ border:`1px solid ${C.line}`, borderRadius:12, padding:"13px 15px" }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+                <span style={{ fontSize:12.5, color:C.sub, fontWeight:500 }}>{r.l}</span>
+                <YoYBadge g={g} terbalik={r.terbalik} />
+              </div>
+              <div className="mono" style={{ fontSize:17, fontWeight:700 }}>{money(r.a)}</div>
+              <div style={{ fontSize:11, color:C.sub, marginTop:4 }}>
+                {YEAR-1}: <span className="mono">{money(r.b)}</span></div>
+              <div style={{ fontSize:11, color:C.sub, marginTop:2 }}>
+                Selisih: <span className="mono" style={{ fontWeight:600,
+                  color:(r.a-r.b)>=0 ? (r.terbalik?C.neg:C.pos) : (r.terbalik?C.pos:C.neg) }}>
+                  {(r.a-r.b)>=0?"+":""}{money(r.a-r.b)}</span></div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Margin laba dua tahun */}
+      <div style={{ display:"flex", gap:14, flexWrap:"wrap", padding:"11px 14px", borderRadius:10,
+        background:C.surf, fontSize:12.5, marginBottom:ringkas?0:16 }}>
+        <span style={{ color:C.sub }}>Margin laba bersih:</span>
+        <span><b>{YEAR}</b> <span className="mono" style={{ fontWeight:700,
+          color:kini.npm>=0.15?C.pos:C.neg }}>{pct(kini.npm)}</span></span>
+        <span><b>{YEAR-1}</b> <span className="mono" style={{ fontWeight:700,
+          color:lalu.npm>=0.15?C.pos:C.neg }}>{pct(lalu.npm)}</span></span>
+        <span style={{ marginLeft:"auto", color:C.sub }}>
+          {kini.npm>=lalu.npm ? "Margin membaik dibanding tahun lalu." : "Margin menurun dibanding tahun lalu."}
+        </span>
+      </div>
+
+      {!ringkas && adaDataBulanan && <>
+        {/* Grafik pendapatan dua tahun */}
+        <div style={{ fontWeight:600, fontSize:13.5, marginBottom:2 }}>Pendapatan per Bulan — {YEAR} vs {YEAR-1}</div>
+        <div style={{ fontSize:11.5, color:C.sub, marginBottom:6 }}>Batang berdampingan agar mudah dibandingkan</div>
+        <ResponsiveContainer width="100%" height={240}>
+          <BarChart data={chartData} margin={{ left:-18, right:6, top:10 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
+            <XAxis dataKey="m" tick={{ fontSize:12, fill:C.sub }} axisLine={false} tickLine={false} />
+            <YAxis tick={{ fontSize:11, fill:C.sub }} tickFormatter={moneyShort} axisLine={false} tickLine={false} width={54} />
+            <Tooltip formatter={(v)=>money(v)} contentStyle={{ borderRadius:10, border:`1px solid ${C.line}`, fontSize:12 }} />
+            <Legend wrapperStyle={{ fontSize:11.5 }} />
+            <Bar dataKey={`${YEAR-1}`} fill={C.line} radius={[4,4,0,0]} />
+            <Bar dataKey={`${YEAR}`} fill={C.teal} radius={[4,4,0,0]} />
+          </BarChart>
+        </ResponsiveContainer>
+
+        {/* Tabel per bulan */}
+        <div style={{ marginTop:16, border:`1px solid ${C.line}`, borderRadius:12, overflow:"hidden" }}>
+          <div style={{ display:"grid", gridTemplateColumns:"58px 1fr 1fr 90px 1fr 1fr 90px",
+            padding:"9px 14px", background:C.deep, color:"#DDECEC", fontSize:10.5, fontWeight:600 }}>
+            <span>BULAN</span>
+            <span style={{ textAlign:"right" }}>PENDAPATAN {YEAR-1}</span>
+            <span style={{ textAlign:"right" }}>PENDAPATAN {YEAR}</span>
+            <span style={{ textAlign:"center" }}>±</span>
+            <span style={{ textAlign:"right" }}>LABA {YEAR-1}</span>
+            <span style={{ textAlign:"right" }}>LABA {YEAR}</span>
+            <span style={{ textAlign:"center" }}>±</span>
+          </div>
+          {bulanTampil.map(r=>{
+            const gRev = deltaPct(r.revKini, r.revLalu);
+            const gLaba = deltaPct(r.labaKini, r.labaLalu);
+            return (
+              <div key={r.bln} style={{ display:"grid", gridTemplateColumns:"58px 1fr 1fr 90px 1fr 1fr 90px",
+                padding:"8px 14px", borderBottom:`1px solid ${C.line}`, fontSize:12, alignItems:"center" }}>
+                <span style={{ fontWeight:600, color:C.deep }}>{r.m}</span>
+                <span className="mono" style={{ textAlign:"right", color:C.sub }}>{r.revLalu?money(r.revLalu):"–"}</span>
+                <span className="mono" style={{ textAlign:"right", fontWeight:600 }}>{r.revKini?money(r.revKini):"–"}</span>
+                <span style={{ textAlign:"center" }}><YoYBadge g={gRev} /></span>
+                <span className="mono" style={{ textAlign:"right", color:C.sub }}>{r.labaLalu?money(r.labaLalu):"–"}</span>
+                <span className="mono" style={{ textAlign:"right", fontWeight:600,
+                  color:r.labaKini<0?C.neg:C.ink }}>{r.labaKini?money(r.labaKini):"–"}</span>
+                <span style={{ textAlign:"center" }}><YoYBadge g={gLaba} /></span>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ fontSize:11, color:C.sub, marginTop:10, lineHeight:1.5 }}>
+          Tanda "–" berarti belum ada transaksi pada bulan itu. Persentase tidak muncul kalau
+          bulan pembanding masih nol (tidak bisa dihitung pertumbuhannya).
+        </div>
+      </>}
+    </div>
+  );
+}
+
 // ============================================================
 // DASHBOARD
 // ============================================================
-function Dashboard({ pnl, balances, trend }) {
+function Dashboard({ pnl, balances, trend, pnlPrev, trendPrev }) {
   const rev = sumBy(pnl, r=>r.type==="Pendapatan");
   const revP = sumBy(pnl, r=>r.type==="Pendapatan"&&r.branch==="Progresif");
   const revS = sumBy(pnl, r=>r.type==="Pendapatan"&&r.branch==="Saraga");
@@ -342,10 +536,19 @@ function Dashboard({ pnl, balances, trend }) {
     );
   };
 
+  // ringkasan tahun lalu untuk pembanding di KPI
+  const lalu = ringkasPnl(pnlPrev);
+  const yoyRev = deltaPct(rev, lalu.rev);
+  const yoyBeban = deltaPct(opBank+kasBeban+cogs, lalu.totalBeban);
+  const yoyProfit = deltaPct(profit, lalu.laba);
+
   const kpis = [
-    { label:"Pendapatan", val:rev, tone:C.teal, sub:"Progresif + Saraga", g:gRev },
-    { label:"Total Beban", val:opBank+kasBeban+cogs, tone:C.neg, sub:"Bank + Kas", g:null },
-    { label:"Laba Bersih", val:profit, tone:C.pos, sub:"Margin "+pct(npm), g:gProfit },
+    { label:"Pendapatan", val:rev, tone:C.teal, sub:"Progresif + Saraga", g:gRev,
+      yoy:yoyRev, yoyVal:lalu.rev },
+    { label:"Total Beban", val:opBank+kasBeban+cogs, tone:C.neg, sub:"Bank + Kas", g:null,
+      yoy:yoyBeban, yoyVal:lalu.totalBeban, terbalik:true },
+    { label:"Laba Bersih", val:profit, tone:C.pos, sub:"Margin "+pct(npm), g:gProfit,
+      yoy:yoyProfit, yoyVal:lalu.laba },
     { label:"Saldo Bank BCA", val:bankBal, tone:C.teal, sub:"Kas: "+moneyShort(kasBal), g:null },
   ];
 
@@ -363,9 +566,22 @@ function Dashboard({ pnl, balances, trend }) {
             </div>
             <div className="mono" style={{ fontSize:19, fontWeight:700, marginTop:10 }}>{money(k.val)}</div>
             <div style={{ fontSize:11.5, color:C.sub, marginTop:3 }}>{k.sub}</div>
+            {k.yoy !== undefined && (
+              <div style={{ display:"flex", alignItems:"center", gap:6, marginTop:7,
+                paddingTop:7, borderTop:`1px solid ${C.line}` }}>
+                <span style={{ fontSize:10.5, color:C.sub }}>vs {YEAR-1}</span>
+                <YoYBadge g={k.yoy} terbalik={k.terbalik} />
+                <span className="mono" style={{ fontSize:10.5, color:C.sub, marginLeft:"auto" }}>
+                  {moneyShort(k.yoyVal)}</span>
+              </div>
+            )}
           </div>
         ))}
       </div>
+
+      {/* Perbandingan tahun (ringkas) */}
+      <PerbandinganTahun pnl={pnl} pnlPrev={pnlPrev} trend={trend} trendPrev={trendPrev}
+        period="all" ringkas />
 
       {/* Tren + Komposisi beban */}
       <div style={{ display:"grid", gridTemplateColumns:"1.6fr 1fr", gap:14, marginBottom:16 }}>
@@ -1004,7 +1220,7 @@ function Trial({ balances }) {
 // ============================================================
 // P&L — toggle Lengkap / Bank saja
 // ============================================================
-function PnL({ pnl, period }) {
+function PnL({ pnl, pnlPrev, period }) {
   const [view, setView] = useState("full");
   const bankOnly = view==="bank";
   const g = (type,branch) => pnl.filter(r=>r.type===type&&(!branch||r.branch===branch));
@@ -1117,6 +1333,57 @@ function PnL({ pnl, period }) {
             Margin {rev?pct(shown/rev):"–"}{bankOnly?" · petty cash "+money(pettyTotal)+" belum dipotong":" · sebelum Wakaf & Deviden"}</div></div>
         <div className="mono" style={{ fontSize:28, fontWeight:800, color:shown>=0?C.pos:C.neg }}>{money(shown)}</div>
       </div>
+
+      {/* Perbandingan dengan tahun sebelumnya */}
+      {(()=>{
+        const lalu = ringkasPnl(pnlPrev);
+        if (!(lalu.rev > 0 || lalu.totalBeban > 0)) return null;
+        const rows = [
+          { l:"Total Pendapatan",           a:rev,            b:lalu.rev,      terbalik:false },
+          { l:"COGS (pembelian)",           a:cogs,           b:lalu.cogs,     terbalik:true  },
+          { l:"Biaya Operasional (Bank)",   a:opBank,         b:lalu.opBank,   terbalik:true  },
+          { l:"Beban Umum & Admin (Kas)",   a:kasBeban,       b:lalu.kasBeban, terbalik:true  },
+          { l:"Total Beban",                a:cogs+opBank+kasBeban+oe, b:lalu.totalBeban, terbalik:true },
+          { l:"Laba Bersih",                a:profitFull,     b:lalu.laba,     terbalik:false, tebal:true },
+        ];
+        return (
+          <div className="card" style={{ marginTop:16, overflow:"hidden" }}>
+            <div style={{ padding:"12px 20px", background:C.brass+"18", fontWeight:700, color:C.deep, fontSize:13 }}>
+              PERBANDINGAN DENGAN {YEAR-1} — {period==="all"?"setahun penuh":MONTHS[period]}
+            </div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 150px 150px 150px 90px",
+              padding:"9px 20px", background:C.surf, fontSize:11, fontWeight:600, color:C.sub }}>
+              <span>POS</span>
+              <span style={{ textAlign:"right" }}>{YEAR-1}</span>
+              <span style={{ textAlign:"right" }}>{YEAR}</span>
+              <span style={{ textAlign:"right" }}>SELISIH</span>
+              <span style={{ textAlign:"center" }}>±</span>
+            </div>
+            {rows.map(r=>{
+              const g = deltaPct(r.a, r.b);
+              const selisih = r.a - r.b;
+              const bagus = r.terbalik ? selisih<=0 : selisih>=0;
+              return (
+                <div key={r.l} style={{ display:"grid", gridTemplateColumns:"1fr 150px 150px 150px 90px",
+                  padding: r.tebal?"12px 20px":"9px 20px", borderBottom:`1px solid ${C.line}`,
+                  fontSize:12.5, alignItems:"center",
+                  background: r.tebal?C.surf:"transparent", fontWeight: r.tebal?700:400 }}>
+                  <span style={{ color:r.tebal?C.ink:C.sub }}>{r.l}</span>
+                  <span className="mono" style={{ textAlign:"right", color:C.sub }}>{money(r.b)}</span>
+                  <span className="mono" style={{ textAlign:"right", fontWeight:600 }}>{money(r.a)}</span>
+                  <span className="mono" style={{ textAlign:"right", fontWeight:600,
+                    color: bagus?C.pos:C.neg }}>{selisih>=0?"+":""}{money(selisih)}</span>
+                  <span style={{ textAlign:"center" }}><YoYBadge g={g} terbalik={r.terbalik} /></span>
+                </div>
+              );
+            })}
+            <div style={{ padding:"11px 20px", fontSize:11.5, color:C.sub, lineHeight:1.5 }}>
+              Warna hijau berarti perubahan yang menguntungkan: pendapatan & laba naik, atau beban turun.
+              Persentase tidak ditampilkan bila pos tahun {YEAR-1} masih nol.
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1379,7 +1646,7 @@ function PertumbuhanSiswa({ orgId }) {
 // ============================================================
 // ANALISIS KEUANGAN — rasio, tren, per cabang, insight otomatis
 // ============================================================
-function Analisis({ pnl, balances, trend, period }) {
+function Analisis({ pnl, balances, trend, period, pnlPrev, trendPrev }) {
   const S = (type,branch) => pnl.filter(r=>r.type===type&&(!branch||r.branch===branch))
     .reduce((s,r)=>s+Number(r.amount),0);
   const rev=S("Pendapatan"), revP=S("Pendapatan","Progresif"), revS=S("Pendapatan","Saraga");
@@ -1437,6 +1704,23 @@ function Analisis({ pnl, balances, trend, period }) {
         if (delta < 0) insights.push({ t:"warn", m:`Laba ${namaCur} turun ${money(Math.abs(delta))} dibanding ${namaPrev}. Cek kenaikan beban atau penurunan pendapatan.` });
         else insights.push({ t:"good", m:`Laba ${namaCur} naik ${money(delta)} dibanding ${namaPrev}. Tren positif.` });
       }
+    }
+
+    // perbandingan tahun-ke-tahun (YoY)
+    const thnLalu = ringkasPnl(pnlPrev);
+    if (thnLalu.rev > 0) {
+      const gRevY = deltaPct(rev, thnLalu.rev);
+      const gLabaY = deltaPct(laba, thnLalu.laba);
+      if (gRevY !== null) {
+        if (gRevY >= 0) insights.push({ t:"good", m:`Pendapatan ${YEAR} tumbuh ${pct(gRevY)} dibanding ${YEAR-1} (${money(thnLalu.rev)} → ${money(rev)}).` });
+        else insights.push({ t:"warn", m:`Pendapatan ${YEAR} turun ${pct(Math.abs(gRevY))} dibanding ${YEAR-1} (${money(thnLalu.rev)} → ${money(rev)}). Tinjau penyebabnya per cabang.` });
+      }
+      if (gLabaY !== null && thnLalu.laba > 0) {
+        if (gLabaY >= 0) insights.push({ t:"good", m:`Laba bersih ${YEAR} naik ${pct(gLabaY)} dibanding ${YEAR-1}. Efisiensi terjaga seiring pertumbuhan.` });
+        else insights.push({ t:"warn", m:`Laba bersih ${YEAR} turun ${pct(Math.abs(gLabaY))} dibanding ${YEAR-1} meski periode berjalan. Bandingkan pos beban terbesar antar tahun.` });
+      }
+      if (thnLalu.npm > 0 && npm < thnLalu.npm - 0.03)
+        insights.push({ t:"warn", m:`Margin laba turun dari ${pct(thnLalu.npm)} (${YEAR-1}) ke ${pct(npm)} (${YEAR}). Pendapatan boleh naik, tapi beban naik lebih cepat.` });
     }
   }
 
@@ -1525,6 +1809,22 @@ function Analisis({ pnl, balances, trend, period }) {
       add(3, "Pertumbuhan", "Pendapatan tumbuh baik — jaga momentum",
         `Pendapatan ${namaBulanRev} naik ${pct(revGrowth)} dibanding ${namaBulanRevPrev}. Momentum bagus — pertahankan yang sedang berhasil, dan pastikan kapasitas (pelatih, jadwal, kolam) siap menampung pertumbuhan siswa agar kualitas tetap terjaga.`);
 
+    // --- PERTUMBUHAN / KEUANGAN: berbasis perbandingan tahun ---
+    const thnLalu2 = ringkasPnl(pnlPrev);
+    if (thnLalu2.rev > 0) {
+      const gRevY = deltaPct(rev, thnLalu2.rev);
+      const gBebanY = deltaPct(totalBeban, thnLalu2.totalBeban);
+      if (gRevY !== null && gBebanY !== null && gBebanY > gRevY + 0.05)
+        add(2, "Keuangan", "Beban tumbuh lebih cepat daripada pendapatan",
+          `Dibanding ${YEAR-1}, pendapatan ${gRevY>=0?"naik":"turun"} ${pct(Math.abs(gRevY))} sementara beban ${gBebanY>=0?"naik":"turun"} ${pct(Math.abs(gBebanY))}. Bandingkan pos beban terbesar antar tahun (gaji pelatih, sewa kolam, marketing) dan cari mana yang melonjak tanpa menambah pendapatan.`);
+      if (gRevY !== null && gRevY < -0.1)
+        add(1, "Pertumbuhan", `Pendapatan menyusut dibanding ${YEAR-1}`,
+          `Omzet turun ${pct(Math.abs(gRevY))} dari tahun sebelumnya. Ini penurunan tahunan, bukan fluktuasi bulanan — periksa apakah jumlah siswa aktif berkurang, ada kompetitor baru, atau kelas yang dihentikan. Prioritaskan retensi siswa lama sebelum menambah anggaran akuisisi.`);
+      if (gRevY !== null && gRevY > 0.2)
+        add(3, "Pertumbuhan", `Pertumbuhan tahunan kuat (+${pct(gRevY)})`,
+          `Pendapatan ${YEAR} jauh di atas ${YEAR-1}. Pastikan kapasitas menyusul: rasio pelatih terhadap siswa, ketersediaan slot kolam, dan sistem administrasi. Pertumbuhan cepat tanpa kapasitas memadai biasanya menurunkan kualitas dan retensi.`);
+    }
+
     // --- PERTUMBUHAN: marketing umum (kalau margin sehat) ---
     if (npm >= 0.15)
       add(3, "Pertumbuhan", "Ada ruang untuk investasi marketing",
@@ -1597,6 +1897,10 @@ function Analisis({ pnl, balances, trend, period }) {
           </div>
         </div>
       )}
+
+      {/* Perbandingan tahun (lengkap: KPI + grafik + tabel per bulan) */}
+      <PerbandinganTahun pnl={pnl} pnlPrev={pnlPrev} trend={trend} trendPrev={trendPrev}
+        period={period} />
 
       {/* Rasio */}
       <div className="card" style={{ padding:"18px 20px", marginBottom:16 }}>
