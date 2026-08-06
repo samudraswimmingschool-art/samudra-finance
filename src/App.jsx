@@ -29,7 +29,12 @@ import {
   periodRange, signOut,
 } from "./lib/api";
 
-const YEAR = 2026;
+let YEAR = 2026;                       // variabel modul, dibaca semua komponen
+let _setYearState = null;              // penghubung ke state React
+export function setBookYear(y) {       // dipanggil dari selector
+  YEAR = y;
+  if (_setYearState) _setYearState(y);
+}
 
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined=loading
@@ -37,6 +42,8 @@ export default function App() {
   const [accounts, setAccounts] = useState([]);
   const [tab, setTab] = useState("dashboard");
   const [period, setPeriod] = useState("all");
+  const [yearTick, setYearTick] = useState(2026);   // memicu re-render saat tahun ganti
+  _setYearState = setYearTick;
   const [loading, setLoading] = useState(false);
 
   // laporan aktif (di-load sesuai tab & period)
@@ -105,7 +112,7 @@ export default function App() {
       }
     } catch (e) { alert("Gagal memuat: " + e.message); }
     finally { setLoading(false); }
-  }, [orgId, tab, period]);
+  }, [orgId, tab, period, yearTick]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -130,6 +137,14 @@ export default function App() {
               placeItems:"center", fontWeight:800, color:"#fff" }}>S</div>
             <div><div style={{ fontWeight:700, fontSize:15, lineHeight:1 }}>Samudra</div>
               <div style={{ fontSize:11, color:C.brass, letterSpacing:".08em", marginTop:3 }}>FINANCE</div></div>
+          </div>
+          <div className="no-print" style={{ padding:"0 8px 12px" }}>
+            <label style={{ fontSize:10, letterSpacing:".08em", color:"#5F8080", fontWeight:700, display:"block", marginBottom:5 }}>TAHUN BUKU</label>
+            <select value={yearTick} onChange={e=>setBookYear(+e.target.value)}
+              style={{ width:"100%", background:C.teal, color:"#fff", border:"none", borderRadius:8,
+                padding:"8px 10px", fontSize:13.5, fontWeight:700, fontFamily:"inherit", cursor:"pointer" }}>
+              {[2024, 2025, 2026, 2027].map(y=><option key={y} value={y} style={{ color:C.ink }}>{y}</option>)}
+            </select>
           </div>
           <div style={{ flex:1, overflowY:"auto" }}>
             {NAV.map((n, i) => n.sec ? (
@@ -187,20 +202,20 @@ export default function App() {
                                           journal={journal} acctById={acctById} orgId={orgId} onChange={load} />}
           {tab==="journal"   && <Journal accounts={accounts} acctById={acctById} acctByCode={acctByCode}
                                           journal={journal} orgId={orgId} onChange={load} />}
-          {tab==="analisis"  && <Analisis pnl={pnl} balances={balances} trend={trend} period={period} />}
-          {tab==="siswa"     && <PertumbuhanSiswa orgId={orgId} />}
-          {tab==="owner"     && <OwnerReport orgId={orgId} orgName={orgName} />}
-          {tab==="target"    && <TargetView orgId={orgId} />}
-          {tab==="ledger"    && <Ledger balances={balances} />}
-          {tab==="trial"     && <Trial balances={balances} />}
-          {tab==="pnl"       && <PnL pnl={pnl} period={period} />}
-          {tab==="balance"   && <Balance sheet={sheet} retained={retained} period={period} />}
-          {tab==="equity"    && <Equity orgId={orgId} period={period} />}
-          {tab==="cashflow"  && <CashFlow flow={flow} detail={flowDetail} />}
-          {tab==="coa"       && <COAView accounts={accounts} orgId={orgId} onChange={reloadAccounts} />}
-          {tab==="aset"      && <AsetTetap orgId={orgId} acctByCode={acctByCode} accounts={accounts} />}
-          {tab==="saldoawal" && <SaldoAwal orgId={orgId} accounts={accounts} acctByCode={acctByCode} onChange={load} />}
-          {tab==="deferred"  && <Deferred orgId={orgId} acctByCode={acctByCode} accounts={accounts} onChange={load} />}
+          {tab==="analisis"  && <Analisis key={yearTick}pnl={pnl} balances={balances} trend={trend} period={period} />}
+          {tab==="siswa"     && <PertumbuhanSiswa key={yearTick}orgId={orgId} />}
+          {tab==="owner"     && <OwnerReport key={yearTick}orgId={orgId} orgName={orgName} />}
+          {tab==="target"    && <TargetView key={yearTick}orgId={orgId} />}
+          {tab==="ledger"    && <Ledger key={yearTick}balances={balances} />}
+          {tab==="trial"     && <Trial key={yearTick}balances={balances} />}
+          {tab==="pnl"       && <PnL key={yearTick}pnl={pnl} period={period} />}
+          {tab==="balance"   && <Balance key={yearTick}sheet={sheet} retained={retained} period={period} />}
+          {tab==="equity"    && <Equity key={yearTick}orgId={orgId} period={period} />}
+          {tab==="cashflow"  && <CashFlow key={yearTick}flow={flow} detail={flowDetail} />}
+          {tab==="coa"       && <COAView key={yearTick}accounts={accounts} orgId={orgId} onChange={reloadAccounts} />}
+          {tab==="aset"      && <AsetTetap key={yearTick}orgId={orgId} acctByCode={acctByCode} accounts={accounts} />}
+          {tab==="saldoawal" && <SaldoAwal key={yearTick}orgId={orgId} accounts={accounts} acctByCode={acctByCode} onChange={load} />}
+          {tab==="deferred"  && <Deferred key={yearTick}orgId={orgId} acctByCode={acctByCode} accounts={accounts} onChange={load} />}
           </div>
         </main>
       </div>
