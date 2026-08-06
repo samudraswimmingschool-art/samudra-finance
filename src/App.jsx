@@ -1678,19 +1678,22 @@ function PertumbuhanSiswa({ orgId }) {
 
             {/* Tabel per bulan dua tahun */}
             <div style={{ marginTop:16, border:`1px solid ${C.line}`, borderRadius:12, overflow:"hidden" }}>
-              <div style={{ display:"grid", gridTemplateColumns:"58px 1fr 1fr 90px 90px 90px",
+              <div style={{ display:"grid", gridTemplateColumns:"58px 1fr 1fr 90px 100px 100px 80px",
                 padding:"9px 14px", background:C.deep, color:"#DDECEC", fontSize:10.5, fontWeight:600 }}>
                 <span>BULAN</span>
                 <span style={{ textAlign:"right" }}>PENDAFTARAN {YEAR-1}</span>
                 <span style={{ textAlign:"right" }}>PENDAFTARAN {YEAR}</span>
                 <span style={{ textAlign:"center" }}>±</span>
-                <span style={{ textAlign:"center" }}>TRX {YEAR-1}</span>
-                <span style={{ textAlign:"center" }}>TRX {YEAR}</span>
+                <span style={{ textAlign:"center" }}>EST. SISWA {YEAR-1}</span>
+                <span style={{ textAlign:"center" }}>EST. SISWA {YEAR}</span>
+                <span style={{ textAlign:"center" }}>±</span>
               </div>
               {bulanGabung.map(m=>{
                 const g = deltaPct(m.pendapatan, m.prevPendapatan);
+                const gSiswa = (m.siswa!==null && m.prevSiswa!==null)
+                  ? deltaPct(m.siswa, m.prevSiswa) : null;
                 return (
-                  <div key={m.bln} style={{ display:"grid", gridTemplateColumns:"58px 1fr 1fr 90px 90px 90px",
+                  <div key={m.bln} style={{ display:"grid", gridTemplateColumns:"58px 1fr 1fr 90px 100px 100px 80px",
                     padding:"8px 14px", borderBottom:`1px solid ${C.line}`, fontSize:12, alignItems:"center" }}>
                     <span style={{ fontWeight:600, color:C.deep }}>{m.nama}</span>
                     <span className="mono" style={{ textAlign:"right", color:C.sub }}>
@@ -1698,16 +1701,24 @@ function PertumbuhanSiswa({ orgId }) {
                     <span className="mono" style={{ textAlign:"right", fontWeight:600, color:C.teal }}>
                       {m.pendapatan?money(m.pendapatan):"–"}</span>
                     <span style={{ textAlign:"center" }}><YoYBadge g={g} /></span>
-                    <span className="mono" style={{ textAlign:"center", color:C.sub }}>{m.prevTransaksi||"–"}</span>
-                    <span className="mono" style={{ textAlign:"center", fontWeight:600 }}>{m.transaksi||"–"}</span>
+                    <span className="mono" style={{ textAlign:"center", color:C.sub }}>
+                      {biayaNum ? (m.prevSiswa||"–") : "—"}</span>
+                    <span className="mono" style={{ textAlign:"center", fontWeight:700, color:C.brass }}>
+                      {biayaNum ? (m.siswa||"–") : "—"}</span>
+                    <span style={{ textAlign:"center" }}>
+                      {biayaNum ? <YoYBadge g={gSiswa} /> : <span style={{ fontSize:11, color:C.sub }}>—</span>}</span>
                   </div>
                 );
               })}
             </div>
             <div style={{ fontSize:11, color:C.sub, marginTop:10, lineHeight:1.5 }}>
-              Persentase tidak muncul kalau bulan pembanding di {YEAR-1} masih nol — pertumbuhan dari
-              nol tidak bisa dihitung. Isi biaya pendaftaran di atas untuk membandingkan jumlah siswa,
-              bukan hanya rupiah.
+              {biayaNum
+                ? <>Estimasi siswa dihitung dari pendapatan pendaftaran ÷ biaya per siswa yang Anda isi
+                    ({money(biayaNum)}). Kalau tarif pendaftaran {YEAR-1} berbeda dari {YEAR}, angka
+                    perbandingan siswanya akan meleset — sesuaikan tarif dulu bila perlu.</>
+                : <>Kolom estimasi siswa masih kosong. Isi <b>biaya pendaftaran per siswa</b> di atas untuk
+                    membandingkan jumlah siswa, bukan hanya rupiah.</>}
+              {" "}Persentase tidak muncul bila bulan pembanding di {YEAR-1} masih nol.
             </div>
           </div>
         ) : (
