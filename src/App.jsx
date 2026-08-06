@@ -29,12 +29,19 @@ import {
   periodRange, signOut,
 } from "./lib/api";
 
-let YEAR = 2026;                       // variabel modul, dibaca semua komponen
-let _setYearState = null;              // penghubung ke state React
-export function setBookYear(y) {       // dipanggil dari selector
+/* ============================================================
+   TAHUN BUKU DINAMIS
+   YEAR adalah variabel modul yang dibaca oleh semua komponen di
+   file ini. setBookYear() mengubahnya sekaligus memicu re-render
+   lewat state `yearTick` di dalam App().
+   ============================================================ */
+let YEAR = 2026;
+let _setYearState = null;
+export function setBookYear(y) {
   YEAR = y;
   if (_setYearState) _setYearState(y);
 }
+const TAHUN_TERSEDIA = [2024, 2025, 2026, 2027];
 
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined=loading
@@ -42,9 +49,14 @@ export default function App() {
   const [accounts, setAccounts] = useState([]);
   const [tab, setTab] = useState("dashboard");
   const [period, setPeriod] = useState("all");
-  const [yearTick, setYearTick] = useState(2026);   // memicu re-render saat tahun ganti
-  _setYearState = setYearTick;
+  const [yearTick, setYearTick] = useState(YEAR); // memicu re-render saat tahun ganti
   const [loading, setLoading] = useState(false);
+
+  // hubungkan setter global ke state (sekali saja)
+  useEffect(() => {
+    _setYearState = setYearTick;
+    return () => { _setYearState = null; };
+  }, []);
 
   // laporan aktif (di-load sesuai tab & period)
   const [journal, setJournal] = useState([]);
@@ -84,7 +96,7 @@ export default function App() {
     const m = {}; accounts.forEach((a) => (m[a.code] = a)); return m;
   }, [accounts]);
 
-  // --- muat data sesuai tab & period ---
+  // --- muat data sesuai tab, period & tahun ---
   const load = useCallback(async () => {
     if (!orgId) return;
     const [start, end] = periodRange(YEAR, period);
@@ -138,14 +150,20 @@ export default function App() {
             <div><div style={{ fontWeight:700, fontSize:15, lineHeight:1 }}>Samudra</div>
               <div style={{ fontSize:11, color:C.brass, letterSpacing:".08em", marginTop:3 }}>FINANCE</div></div>
           </div>
+
+          {/* Pilihan tahun buku */}
           <div className="no-print" style={{ padding:"0 8px 12px" }}>
-            <label style={{ fontSize:10, letterSpacing:".08em", color:"#5F8080", fontWeight:700, display:"block", marginBottom:5 }}>TAHUN BUKU</label>
+            <label style={{ fontSize:10, letterSpacing:".08em", color:"#5F8080",
+              fontWeight:700, display:"block", marginBottom:5 }}>TAHUN BUKU</label>
             <select value={yearTick} onChange={e=>setBookYear(+e.target.value)}
               style={{ width:"100%", background:C.teal, color:"#fff", border:"none", borderRadius:8,
                 padding:"8px 10px", fontSize:13.5, fontWeight:700, fontFamily:"inherit", cursor:"pointer" }}>
-              {[2024, 2025, 2026, 2027].map(y=><option key={y} value={y} style={{ color:C.ink }}>{y}</option>)}
+              {TAHUN_TERSEDIA.map(y=>(
+                <option key={y} value={y} style={{ color:C.ink }}>{y}</option>
+              ))}
             </select>
           </div>
+
           <div style={{ flex:1, overflowY:"auto" }}>
             {NAV.map((n, i) => n.sec ? (
               <div key={"s"+i} style={{ fontSize:10, letterSpacing:".12em", color:"#5F8080",
@@ -177,6 +195,7 @@ export default function App() {
           {/* period selector */}
           {SHOW_PERIOD.includes(tab) && (
             <div className="no-print" style={{ display:"flex", gap:5, flexWrap:"wrap", marginBottom:18, alignItems:"center" }}>
+              <span style={{ fontSize:12.5, fontWeight:700, color:C.deep, marginRight:4 }}>{yearTick}</span>
               <button className="btn" onClick={()=>setPeriod("all")}
                 style={periodBtn(period==="all")}>Semua</button>
               {MONTHS.map((m,i)=>(
@@ -198,24 +217,24 @@ export default function App() {
 
           <div id="print-area">
           {tab==="dashboard" && <Dashboard pnl={pnl} balances={balances} trend={trend} />}
-          {tab==="transaksi" && <Transaksi accounts={accounts} acctByCode={acctByCode}
+          {tab==="transaksi" && <Transaksi key={yearTick} accounts={accounts} acctByCode={acctByCode}
                                           journal={journal} acctById={acctById} orgId={orgId} onChange={load} />}
-          {tab==="journal"   && <Journal accounts={accounts} acctById={acctById} acctByCode={acctByCode}
+          {tab==="journal"   && <Journal key={yearTick} accounts={accounts} acctById={acctById} acctByCode={acctByCode}
                                           journal={journal} orgId={orgId} onChange={load} />}
-          {tab==="analisis"  && <Analisis key={yearTick}pnl={pnl} balances={balances} trend={trend} period={period} />}
-          {tab==="siswa"     && <PertumbuhanSiswa key={yearTick}orgId={orgId} />}
-          {tab==="owner"     && <OwnerReport key={yearTick}orgId={orgId} orgName={orgName} />}
-          {tab==="target"    && <TargetView key={yearTick}orgId={orgId} />}
-          {tab==="ledger"    && <Ledger key={yearTick}balances={balances} />}
-          {tab==="trial"     && <Trial key={yearTick}balances={balances} />}
-          {tab==="pnl"       && <PnL key={yearTick}pnl={pnl} period={period} />}
-          {tab==="balance"   && <Balance key={yearTick}sheet={sheet} retained={retained} period={period} />}
-          {tab==="equity"    && <Equity key={yearTick}orgId={orgId} period={period} />}
-          {tab==="cashflow"  && <CashFlow key={yearTick}flow={flow} detail={flowDetail} />}
-          {tab==="coa"       && <COAView key={yearTick}accounts={accounts} orgId={orgId} onChange={reloadAccounts} />}
-          {tab==="aset"      && <AsetTetap key={yearTick}orgId={orgId} acctByCode={acctByCode} accounts={accounts} />}
-          {tab==="saldoawal" && <SaldoAwal key={yearTick}orgId={orgId} accounts={accounts} acctByCode={acctByCode} onChange={load} />}
-          {tab==="deferred"  && <Deferred key={yearTick}orgId={orgId} acctByCode={acctByCode} accounts={accounts} onChange={load} />}
+          {tab==="analisis"  && <Analisis pnl={pnl} balances={balances} trend={trend} period={period} />}
+          {tab==="siswa"     && <PertumbuhanSiswa key={yearTick} orgId={orgId} />}
+          {tab==="owner"     && <OwnerReport key={yearTick} orgId={orgId} orgName={orgName} />}
+          {tab==="target"    && <TargetView key={yearTick} orgId={orgId} />}
+          {tab==="ledger"    && <Ledger balances={balances} />}
+          {tab==="trial"     && <Trial balances={balances} />}
+          {tab==="pnl"       && <PnL pnl={pnl} period={period} />}
+          {tab==="balance"   && <Balance sheet={sheet} retained={retained} period={period} />}
+          {tab==="equity"    && <Equity key={yearTick} orgId={orgId} period={period} />}
+          {tab==="cashflow"  && <CashFlow flow={flow} detail={flowDetail} />}
+          {tab==="coa"       && <COAView accounts={accounts} orgId={orgId} onChange={reloadAccounts} />}
+          {tab==="aset"      && <AsetTetap key={yearTick} orgId={orgId} acctByCode={acctByCode} accounts={accounts} />}
+          {tab==="saldoawal" && <SaldoAwal key={yearTick} orgId={orgId} accounts={accounts} acctByCode={acctByCode} onChange={load} />}
+          {tab==="deferred"  && <Deferred key={yearTick} orgId={orgId} acctByCode={acctByCode} accounts={accounts} onChange={load} />}
           </div>
         </main>
       </div>
@@ -332,7 +351,7 @@ function Dashboard({ pnl, balances, trend }) {
 
   return (
     <div className="pop">
-      <PageHead eyebrow="Beranda Keuangan" title="Ringkasan Performa" sub="Data langsung dari database" />
+      <PageHead eyebrow="Beranda Keuangan" title="Ringkasan Performa" sub={`Data langsung dari database · tahun buku ${YEAR}`} />
 
       {/* KPI dengan indikator pertumbuhan */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom:16 }}>
@@ -502,7 +521,7 @@ function Transaksi({ accounts, acctByCode, acctById, journal, orgId, onChange })
     setKat(key);
     const opsi = accounts.filter(a=>a.is_active!==false).filter(KATEGORI[key].filter);
     setForm({
-      date: `${YEAR}-07-01`, jumlah: "", cash: "bank",
+      date: `${YEAR}-01-01`, jumlah: "", cash: "bank",
       lawan_id: opsi[0]?.id || "", memo: "", hutang_id: defaultHutang,
     });
     setFlash("");
@@ -546,7 +565,7 @@ function Transaksi({ accounts, acctByCode, acctById, journal, orgId, onChange })
     return (
       <div className="pop">
         <PageHead eyebrow="Catat Transaksi" title="Transaksi"
-          sub="Pilih jenis transaksi — jurnal debet-kredit dibuat otomatis (sesuai SAK)." />
+          sub={`Pilih jenis transaksi — jurnal debet-kredit dibuat otomatis (sesuai SAK). Tahun buku ${YEAR}.`} />
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:20 }}>
           {Object.entries(KATEGORI).map(([key, K]) => (
             <button key={key} className="btn" onClick={() => pilihKategori(key)}
@@ -660,7 +679,7 @@ function Transaksi({ accounts, acctByCode, acctById, journal, orgId, onChange })
         )}
 
         <label style={lbl}>Keterangan (opsional)</label>
-        <input placeholder={`mis. ${K.label} bulan Juli`} value={form.memo}
+        <input placeholder={`mis. ${K.label} bulan Januari`} value={form.memo}
           onChange={e=>setForm({...form,memo:e.target.value})} style={{ ...inp, marginBottom:18 }} />
 
         {/* ringkasan jurnal otomatis */}
@@ -706,13 +725,13 @@ const Auto = ({ d, v, side }) => (
 function Journal({ accounts, acctById, acctByCode, journal, orgId, onChange }) {
   const first = acctByCode["4-40000"]?.id || accounts[0]?.id;
   const bank = acctByCode["1-10002"]?.id;
-  const blank = () => ({ date:`${YEAR}-07-01`, memo:"", cash:"bank",
+  const blank = () => ({ date:`${YEAR}-01-01`, memo:"", cash:"bank",
     lines:[{ account_id:first, debit:"", credit:"" }, { account_id:bank, debit:"", credit:"" }] });
   const [draft, setDraft] = useState(blank());
   const [editId, setEditId] = useState(null);      // id jurnal yang sedang diedit
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState("");
-  // filter tanggal (revisi #4)
+  // filter tanggal
   const [fStart, setFStart] = useState("");
   const [fEnd, setFEnd] = useState("");
 
@@ -778,7 +797,7 @@ function Journal({ accounts, acctById, acctByCode, journal, orgId, onChange }) {
   return (
     <div className="pop">
       <PageHead eyebrow="Inti Akuntansi" title="Jurnal Umum"
-        sub="Input sekali — Buku Besar, Neraca Saldo & Laba Rugi terisi otomatis." />
+        sub={`Input sekali — Buku Besar, Neraca Saldo & Laba Rugi terisi otomatis. Tahun buku ${YEAR}.`} />
       <div style={{ display:"flex", gap:10, marginBottom:14, fontSize:12.5 }}>
         <div style={{ flex:1, padding:"10px 14px", borderRadius:10, background:C.teal+"12",
           border:`1px solid ${C.teal}30`, color:C.deep }}>
@@ -803,7 +822,7 @@ function Journal({ accounts, acctById, acctByCode, journal, orgId, onChange }) {
           <div style={{ flex:"0 0 145px" }}><label style={lbl}>Tanggal</label>
             <input type="date" value={draft.date} onChange={e=>setDraft({...draft,date:e.target.value})} style={inp} /></div>
           <div style={{ flex:1 }}><label style={lbl}>Keterangan</label>
-            <input placeholder="mis. Gaji Pelatih Private — Juli" value={draft.memo}
+            <input placeholder="mis. Gaji Pelatih Private — Januari" value={draft.memo}
               onChange={e=>setDraft({...draft,memo:e.target.value})} style={inp} /></div>
           <div style={{ flex:"0 0 160px" }}><label style={lbl}>Sumber / Penanda</label>
             <select value={draft.cash} onChange={e=>setDraft({...draft,cash:e.target.value})}
@@ -925,7 +944,7 @@ function Ledger({ balances }) {
     (a.name.toLowerCase().includes(q.toLowerCase())||a.code.includes(q)));
   return (
     <div className="pop">
-      <PageHead eyebrow="Turunan Otomatis" title="Buku Besar" sub="Saldo tiap akun dari jurnal." />
+      <PageHead eyebrow="Turunan Otomatis" title="Buku Besar" sub={`Saldo tiap akun dari jurnal · ${YEAR}`} />
       <div className="card" style={{ padding:"10px 14px", marginBottom:16, display:"flex", alignItems:"center", gap:8 }}>
         <Search size={16} color={C.sub} />
         <input placeholder="Cari akun atau kode…" value={q} onChange={e=>setQ(e.target.value)}
@@ -960,7 +979,7 @@ function Trial({ balances }) {
   const bal = Math.round(dSum)===Math.round(cSum);
   return (
     <div className="pop">
-      <PageHead eyebrow="Turunan Otomatis" title="Neraca Saldo" sub="Total debet harus sama dengan total kredit." />
+      <PageHead eyebrow="Turunan Otomatis" title="Neraca Saldo" sub={`Total debet harus sama dengan total kredit · ${YEAR}`} />
       <div className="card" style={{ overflow:"hidden" }}>
         <div style={{ display:"grid", gridTemplateColumns:"1fr 160px 160px", padding:"12px 20px",
           background:C.deep, color:"#DDECEC", fontSize:12, fontWeight:600 }}>
@@ -998,6 +1017,7 @@ function PnL({ pnl, period }) {
   const profitBank=rev-opBank+oi-oe;
   const shown=bankOnly?profitBank:profitFull;
   const pettyTotal=cogs+kasBeban;
+  const labelPeriode = period==="all" ? `Tahun ${YEAR}` : `${MONTHS[period]} ${YEAR}`;
 
   const Row=({r,ind})=>(
     <div style={{ display:"grid", gridTemplateColumns:"120px 1fr 170px", padding:"8px 20px",
@@ -1016,7 +1036,7 @@ function PnL({ pnl, period }) {
     <div className="pop">
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
         <PageHead eyebrow="Turunan Otomatis" title="Laporan Laba / Rugi"
-          sub={bankOnly?"Hanya beban yang keluar dari Bank BCA":"Seluruh beban (akuntansi lengkap)"} />
+          sub={`${labelPeriode} · ${bankOnly?"Hanya beban yang keluar dari Bank BCA":"Seluruh beban (akuntansi lengkap)"}`} />
         <div style={{ display:"inline-flex", background:C.surf, borderRadius:10, padding:3, gap:2, marginTop:4 }}>
           {[{k:"full",l:"Lengkap"},{k:"bank",l:"Bank saja"}].map(o=>(
             <button key={o.k} className="btn" onClick={()=>setView(o.k)}
@@ -1189,7 +1209,7 @@ function Equity({ orgId, period }) {
     <span>{l}</span><span className="mono" style={{ textAlign:"right", color:strong?"#fff":(tone||C.ink) }}>{money(v)}</span></div>);
   return (
     <div className="pop">
-      <PageHead eyebrow="Turunan Otomatis" title="Laporan Perubahan Modal" sub="Alur ekuitas periode berjalan" />
+      <PageHead eyebrow="Turunan Otomatis" title="Laporan Perubahan Modal" sub={`Alur ekuitas periode berjalan · ${YEAR}`} />
       <div className="card" style={{ overflow:"hidden" }}>
         <R l="Modal Awal (3-30001)" v={modalAwal} />
         <R l="+ Laba Bersih periode" v={laba} tone={C.pos} />
@@ -1249,9 +1269,9 @@ function PertumbuhanSiswa({ orgId }) {
 
   return (
     <div className="pop">
-<div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
         <PageHead eyebrow="Turunan Otomatis" title="Pertumbuhan Siswa Baru"
-          sub="Analisis pendaftaran dari akun Pendapatan Pendaftaran Siswa Baru" />
+          sub={`Analisis pendaftaran dari akun Pendapatan Pendaftaran Siswa Baru · ${YEAR}`} />
         <button className="btn no-print" onClick={()=>window.print()}
           style={{ display:"flex", alignItems:"center", gap:6, background:C.deep, color:"#fff",
             padding:"9px 14px", borderRadius:9, fontSize:12.5, fontWeight:600, marginTop:4 }}>
@@ -1278,7 +1298,7 @@ function PertumbuhanSiswa({ orgId }) {
       {!loading && aktif.length===0 && (
         <div className="card" style={{ padding:30, textAlign:"center" }}>
           <UserPlus size={38} color={C.brass} style={{ marginBottom:12 }} />
-          <div style={{ fontSize:15, fontWeight:600, marginBottom:6 }}>Belum ada data pendaftaran</div>
+          <div style={{ fontSize:15, fontWeight:600, marginBottom:6 }}>Belum ada data pendaftaran {YEAR}</div>
           <div style={{ fontSize:13, color:C.sub }}>Catat transaksi ke akun "Pendapatan Pendaftaran Siswa Baru" (Transaksi → Terima Pendapatan) untuk melihat analisisnya.</div>
         </div>
       )}
@@ -1381,7 +1401,7 @@ function Analisis({ pnl, balances, trend, period }) {
   const kontribP = revP-opP, kontribS = revS-opS;
   const totalKontrib = kontribP+kontribS;
 
-  // insight otomatis (revisi #3)
+  // insight otomatis
   const insights = [];
   if (rev===0) insights.push({ t:"info", m:"Belum ada pendapatan pada periode ini. Input transaksi untuk melihat analisis." });
   else {
@@ -1398,8 +1418,8 @@ function Analisis({ pnl, balances, trend, period }) {
     }
     if (revS===0 && revP>0) insights.push({ t:"info", m:"Cabang Saraga belum ada pendapatan periode ini. Bandingkan setelah keduanya aktif." });
 
-// tren: bandingkan bulan yang dipilih vs bulan sebelumnya (urut numerik, aman)
-    const byMonth = [...trend]
+    // tren: bandingkan bulan yang dipilih vs bulan sebelumnya (urut numerik, aman)
+    const byMonth = [...(trend||[])]
       .map(t=>({ ...t, bln:Number(t.bulan) }))
       .sort((a,b)=>a.bln-b.bln);
     // "bulan ini" = bulan yang dipilih di tab; kalau "Semua", pakai bulan aktif terakhir
@@ -1420,7 +1440,7 @@ function Analisis({ pnl, balances, trend, period }) {
     }
   }
 
-  const trendData = trend.map(t=>({
+  const trendData = (trend||[]).map(t=>({
     m: MONTHS[Number(t.bulan)-1]?.slice(0,3) || t.bulan,
     rev: Number(t.pendapatan), exp: Number(t.beban), profit: Number(t.laba),
   }));
@@ -1438,16 +1458,21 @@ function Analisis({ pnl, balances, trend, period }) {
   const bankBal = balances.filter(b=>b.code==="1-10002").reduce((s,b)=>s+Number(b.balance),0);
   const kasBal = balances.filter(b=>b.code==="1-10007").reduce((s,b)=>s+Number(b.balance),0);
   const hutang = balances.filter(b=>b.type==="Kewajiban").reduce((s,b)=>s+Number(b.balance),0);
-const byMonthRev = [...trend].map(t=>({ ...t, bln:Number(t.bulan) })).sort((a,b)=>a.bln-b.bln);
+
+  const byMonthRev = [...(trend||[])].map(t=>({ ...t, bln:Number(t.bulan) })).sort((a,b)=>a.bln-b.bln);
   const bulanIniRev = period==="all"
     ? byMonthRev.filter(t=>Number(t.pendapatan)>0).slice(-1)[0]?.bln
     : period+1;
   let revGrowth = null;
+  let namaBulanRev = "", namaBulanRevPrev = "";
   if (bulanIniRev) {
     const cur = byMonthRev.find(t=>t.bln===bulanIniRev);
     const prev = byMonthRev.filter(t=>t.bln<bulanIniRev && Number(t.pendapatan)>0).slice(-1)[0];
-    if (cur && prev && Number(prev.pendapatan)>0)
+    if (cur && prev && Number(prev.pendapatan)>0) {
       revGrowth = (Number(cur.pendapatan)-Number(prev.pendapatan))/Number(prev.pendapatan);
+      namaBulanRev = MONTHS[bulanIniRev-1];
+      namaBulanRevPrev = MONTHS[prev.bln-1];
+    }
   }
 
   const recs = [];
@@ -1495,12 +1520,12 @@ const byMonthRev = [...trend].map(t=>({ ...t, bln:Number(t.bulan) })).sort((a,b)
     // --- PERTUMBUHAN: tren pendapatan ---
     if (revGrowth !== null && revGrowth < 0)
       add(1, "Pertumbuhan", "Pendapatan menurun — perlu dorongan akuisisi siswa",
-        `Pendapatan bulan terakhir turun ${pct(Math.abs(revGrowth))} dari bulan sebelumnya. Pertimbangkan: promo pendaftaran, program referral (siswa ajak teman), konten media sosial rutin, atau kelas trial gratis untuk menarik siswa baru.`);
+        `Pendapatan ${namaBulanRev} turun ${pct(Math.abs(revGrowth))} dibanding ${namaBulanRevPrev}. Pertimbangkan: promo pendaftaran, program referral (siswa ajak teman), konten media sosial rutin, atau kelas trial gratis untuk menarik siswa baru.`);
     else if (revGrowth !== null && revGrowth > 0.1)
       add(3, "Pertumbuhan", "Pendapatan tumbuh baik — jaga momentum",
-        `Pendapatan naik ${pct(revGrowth)} dari bulan lalu. Momentum bagus — pertahankan yang sedang berhasil, dan pastikan kapasitas (pelatih, jadwal, kolam) siap menampung pertumbuhan siswa agar kualitas tetap terjaga.`);
+        `Pendapatan ${namaBulanRev} naik ${pct(revGrowth)} dibanding ${namaBulanRevPrev}. Momentum bagus — pertahankan yang sedang berhasil, dan pastikan kapasitas (pelatih, jadwal, kolam) siap menampung pertumbuhan siswa agar kualitas tetap terjaga.`);
 
-    // --- PERTUMBUHAN: marketing umum (kalau margin sehat & belum ada masalah mendesak) ---
+    // --- PERTUMBUHAN: marketing umum (kalau margin sehat) ---
     if (npm >= 0.15)
       add(3, "Pertumbuhan", "Ada ruang untuk investasi marketing",
         "Dengan margin sehat, mengalokasikan sebagian laba untuk marketing (iklan lokal, media sosial, kerjasama sekolah/komunitas) berpotensi menambah siswa baru tanpa mengganggu arus kas.");
@@ -1514,10 +1539,12 @@ const byMonthRev = [...trend].map(t=>({ ...t, bln:Number(t.bulan) })).sort((a,b)
     3: { label:"PELUANG", color:C.pos },
   };
 
+  const labelPeriode = period==="all" ? `Tahun ${YEAR}` : `${MONTHS[period]} ${YEAR}`;
+
   return (
     <div className="pop">
       <PageHead eyebrow="Turunan Otomatis" title="Analisis Keuangan"
-        sub="Rasio, tren, perbandingan cabang, & rekomendasi otomatis" />
+        sub={`${labelPeriode} · Rasio, tren, perbandingan cabang, & rekomendasi otomatis`} />
 
       {/* Insight otomatis */}
       <div className="card" style={{ padding:"18px 20px", marginBottom:16 }}>
@@ -1720,7 +1747,7 @@ function CashFlow({ flow, detail }) {
   return (
     <div className="pop">
       <PageHead eyebrow="Turunan Otomatis" title="Laporan Arus Kas"
-        sub="Klik judul untuk buka/tutup rincian tiap mutasi Bank & Kas" />
+        sub={`Klik judul untuk buka/tutup rincian tiap mutasi Bank & Kas · ${YEAR}`} />
       <Block title="BANK" sumRows={bankSum} rows={bankDetail} tone={C.teal} />
       <Block title="KAS (PETTY CASH)" sumRows={kasSum} rows={kasDetail} tone={C.kas} />
     </div>
@@ -1781,8 +1808,9 @@ function TargetView({ orgId }) {
 
   const tP=target?Number(target.target_pendapatan):0, tL=target?Number(target.target_laba):0, tT=target?Number(target.target_transaksi):0;
   const now = new Date();
-  const bulanBerjalan = now.getFullYear()===YEAR ? now.getMonth()+1 : 12; // brp bulan sudah lewat
-  const mingguBerjalan = Math.max(1, Math.ceil(bulanBerjalan/12*52));
+  // kalau tahun buku sudah lewat, anggap 12 bulan penuh; kalau tahun depan, anggap 0 (belum jalan)
+  const bulanBerjalan = now.getFullYear()===YEAR ? now.getMonth()+1
+    : (now.getFullYear()>YEAR ? 12 : 0);
 
   const Metric = ({ label, tahunan, aktual, isMoney, icon:Icon, tone }) => {
     const prog = tahunan ? aktual/tahunan : 0;
@@ -1812,12 +1840,14 @@ function TargetView({ orgId }) {
           <Cell2 l="Target / bulan" v={fmt(bulanan)} />
           <Cell2 l="Target / minggu" v={fmt(mingguan)} />
         </div>
-        <div style={{ marginTop:12, padding:"10px 12px", borderRadius:8,
-          background:onTrack?C.pos+"10":C.neg+"0D", fontSize:12, lineHeight:1.5, color:C.ink }}>
-          {onTrack
-            ? <>✓ <b>On track</b> — unggul {fmt(Math.abs(selisih))} dari target sampai bulan ke-{bulanBerjalan}.</>
-            : <>⚠ <b>Di bawah target</b> — kurang {fmt(Math.abs(selisih))}. Butuh <b>{fmt(butuhPerBulan)}/bulan</b> untuk kejar target.</>}
-        </div>
+        {bulanBerjalan > 0 && (
+          <div style={{ marginTop:12, padding:"10px 12px", borderRadius:8,
+            background:onTrack?C.pos+"10":C.neg+"0D", fontSize:12, lineHeight:1.5, color:C.ink }}>
+            {onTrack
+              ? <>✓ <b>On track</b> — unggul {fmt(Math.abs(selisih))} dari target sampai bulan ke-{bulanBerjalan}.</>
+              : <>⚠ <b>Di bawah target</b> — kurang {fmt(Math.abs(selisih))}. Butuh <b>{fmt(butuhPerBulan)}/bulan</b> untuk kejar target.</>}
+          </div>
+        )}
       </div>
     );
   };
@@ -1846,6 +1876,9 @@ function TargetView({ orgId }) {
 
       {edit && (
         <div className="card pop no-print" style={{ padding:20, marginBottom:16, border:`2px solid ${C.brass}` }}>
+          <div style={{ fontSize:12.5, color:C.sub, marginBottom:12 }}>
+            Target ini berlaku untuk tahun buku <b>{YEAR}</b>. Ganti tahun di sidebar untuk mengatur target tahun lain.
+          </div>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:14 }}>
             <div><label style={lbl}>Target Pendapatan / tahun</label>
               <input className="mono" inputMode="numeric" placeholder="mis. 1500000000" value={form.pendapatan}
@@ -1884,7 +1917,7 @@ function TargetView({ orgId }) {
               {" "}Untuk mencapai target pendapatan {money(tP)}, Anda perlu sekitar <b>{minTxLagi.toLocaleString("id-ID")} transaksi lagi</b>
               {" "}(kekurangan {money(sisaPendapatan)}).
             </> : sisaPendapatan<=0 && tP>0 ? <> {" "}🎉 Target pendapatan sudah tercapai!</> : <> {" "}Set target pendapatan untuk melihat kebutuhan transaksi.</>}
-          </> : "Belum ada transaksi tahun ini untuk dianalisis. Input transaksi dulu."}
+          </> : `Belum ada transaksi tahun ${YEAR} untuk dianalisis. Input transaksi dulu.`}
         </div>
       </div>
 
@@ -1958,7 +1991,7 @@ function TargetView({ orgId }) {
                 <span style={{ textAlign:"center" }}>≥ TGT LABA</span>
                 <span style={{ textAlign:"center" }}>≥ TGT TRX</span>
               </div>
-              {!adaData && <div style={{ padding:"18px", fontSize:13, color:C.sub }}>Belum ada data transaksi tahun ini.</div>}
+              {!adaData && <div style={{ padding:"18px", fontSize:13, color:C.sub }}>Belum ada data transaksi tahun {YEAR}.</div>}
               {adaData && rows.map(r=>{
                 const kosong = r.pend===0 && r.tx===0;
                 return (
@@ -2143,7 +2176,7 @@ function OwnerReport({ orgId, orgName }) {
 
       {/* Laba Rugi ringkas */}
       <div className="card" style={{ overflow:"hidden", marginBottom:16 }}>
-        <div style={{ padding:"12px 20px", background:C.deep, color:"#fff", fontWeight:700, fontSize:13.5 }}>LAPORAN LABA RUGI</div>
+        <div style={{ padding:"12px 20px", background:C.deep, color:"#fff", fontWeight:700, fontSize:13.5 }}>LAPORAN LABA RUGI {YEAR}</div>
         <ORow l="Total Pendapatan" v={rev} c={C.pos} />
         <ORow l="Cost of Goods Sold" v={-cogs} />
         <ORow l="Biaya Operasional (Bank)" v={-opBank} />
@@ -2158,7 +2191,7 @@ function OwnerReport({ orgId, orgName }) {
 
       {/* Neraca ringkas */}
       <div className="card" style={{ overflow:"hidden" }}>
-        <div style={{ padding:"12px 20px", background:C.deep, color:"#fff", fontWeight:700, fontSize:13.5 }}>POSISI KEUANGAN (NERACA)</div>
+        <div style={{ padding:"12px 20px", background:C.deep, color:"#fff", fontWeight:700, fontSize:13.5 }}>POSISI KEUANGAN (NERACA) {YEAR}</div>
         <ORow l="Total Aset" v={aset} />
         <ORow l="Total Kewajiban (Hutang)" v={hutang} c={hutang>0?C.neg:C.sub} />
         <ORow l="Total Modal + Laba" v={aset-hutang} c={C.brass} />
@@ -2302,9 +2335,13 @@ function Deferred({ orgId, acctByCode, accounts, onChange }) {
   const [showForm, setShowForm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState("");
-  const asOf = `${YEAR}-${String(new Date().getMonth()+1).padStart(2,"0")}-28`;
+  const now = new Date();
+  // kalau tahun buku bukan tahun berjalan, pakai akhir tahun sebagai batas pengakuan
+  const asOf = now.getFullYear()===YEAR
+    ? `${YEAR}-${String(now.getMonth()+1).padStart(2,"0")}-28`
+    : `${YEAR}-12-28`;
   const revenueAccounts = accounts.filter(a=>a.type==="Pendapatan" && a.is_active!==false);
-  const blank = () => ({ received_date:`${YEAR}-07-01`, description:"", total_amount:"",
+  const blank = () => ({ received_date:`${YEAR}-01-01`, description:"", total_amount:"",
     months:"3", cash:"bank", revenueCode:"4-40000" });
   const [form, setForm] = useState(blank());
 
@@ -2363,7 +2400,7 @@ function Deferred({ orgId, acctByCode, accounts, onChange }) {
       {showForm && (
         <div className="card pop" style={{ padding:20, marginBottom:16, border:`2px solid ${C.teal}` }}>
           <div style={{ fontSize:12.5, color:C.sub, marginBottom:14, lineHeight:1.6, background:C.surf, padding:"12px 14px", borderRadius:8 }}>
-            <b>Contoh:</b> 10 siswa bayar paket 3 bulan @Rp 900.000 = Rp 9.000.000 diterima Juli.
+            <b>Contoh:</b> 10 siswa bayar paket 3 bulan @Rp 900.000 = Rp 9.000.000 diterima Januari.
             Isi total Rp 9.000.000, lama 3 bulan. Sistem mencatatnya dulu sebagai <b>kewajiban</b> (belum jadi
             pendapatan), lalu tiap bulan Anda "akui" Rp 3.000.000 jadi pendapatan sampai habis. Ini sesuai
             prinsip SAK: pendapatan diakui saat jasa diberikan, bukan saat uang diterima.
@@ -2372,7 +2409,7 @@ function Deferred({ orgId, acctByCode, accounts, onChange }) {
             <div><label style={lbl}>Tanggal Terima</label>
               <input type="date" value={form.received_date} onChange={e=>setForm({...form,received_date:e.target.value})} style={inp} /></div>
             <div><label style={lbl}>Keterangan</label>
-              <input placeholder="mis. Paket 3 bulan batch Juli" value={form.description}
+              <input placeholder="mis. Paket 3 bulan batch Januari" value={form.description}
                 onChange={e=>setForm({...form,description:e.target.value})} style={inp} /></div>
           </div>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:14 }}>
@@ -2466,7 +2503,11 @@ function AsetTetap({ orgId, acctByCode, accounts }) {
   const [editId, setEditId] = useState(null);
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState("");
-  const asOf = `${YEAR}-${String(new Date().getMonth()+1).padStart(2,"0")}-28`;
+  const now = new Date();
+  // batas perhitungan penyusutan mengikuti tahun buku yang dipilih
+  const asOf = now.getFullYear()===YEAR
+    ? `${YEAR}-${String(now.getMonth()+1).padStart(2,"0")}-28`
+    : `${YEAR}-12-28`;
   const blank = () => ({ name:"", category:"Peralatan", acquire_date:`${YEAR}-01-01`,
     cost:"", residual:"", useful_life_years:"5", account_asset:"1-10705" });
   const [form, setForm] = useState(blank());
@@ -2509,7 +2550,7 @@ function AsetTetap({ orgId, acctByCode, accounts }) {
   // Posting SEMUA bulan tertunggak sekaligus
   const postingSemua = async (a) => {
     const belum = Math.round(Number(a.accumulated)/Number(a.depr_per_month)) - Math.round(Number(a.posted_amount)/Number(a.depr_per_month));
-    if (!confirm(`Posting semua penyusutan ${a.name} yang belum tercatat (perkiraan ${belum} bulan)?\n\nSetiap bulan dari perolehan sampai sekarang akan dicatat ke jurnal.`)) return;
+    if (!confirm(`Posting semua penyusutan ${a.name} yang belum tercatat (perkiraan ${belum} bulan)?\n\nSetiap bulan dari perolehan sampai batas periode akan dicatat ke jurnal.`)) return;
     setBusy(true); setFlash("");
     try {
       const n = await postAllOutstanding(orgId, a, asOf, acctByCode);
@@ -2546,7 +2587,7 @@ function AsetTetap({ orgId, acctByCode, accounts }) {
     <div className="pop">
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
         <PageHead eyebrow="Master Data" title="Aset Tetap & Penyusutan"
-          sub="Metode garis lurus — penyusutan per bulan otomatis dihitung" />
+          sub={`Metode garis lurus — dihitung s/d ${asOf}`} />
         <button className="btn no-print" onClick={()=>{ setShowForm(!showForm); setEditId(null); setForm(blank()); setFlash(""); }}
           style={{ display:"flex", alignItems:"center", gap:6, background:showForm?C.surf:C.teal,
             color:showForm?C.sub:"#fff", padding:"9px 16px", borderRadius:9, fontSize:13, fontWeight:600, marginTop:4 }}>
@@ -2657,8 +2698,8 @@ function AsetTetap({ orgId, acctByCode, accounts }) {
       </div>
       <div style={{ fontSize:11.5, color:C.sub, marginTop:12, lineHeight:1.6 }}>
         <b>Cara kerja (garis lurus, SAK EMKM):</b> tiap bulan aset menyusut sebesar (Harga − Residu) ÷ (Umur × 12).
-        Tombol <b>POSTING</b> mencatat <b>semua bulan tertunggak sekaligus</b> ke jurnal (mis. aset dibeli Januari, sekarang
-        Juli → 7 bulan langsung tercatat). Ikon <b>dokumen</b> (📄) membuka jadwal per bulan kalau Anda ingin posting
+        Tombol <b>POSTING</b> mencatat <b>semua bulan tertunggak sekaligus</b> ke jurnal (mis. aset dibeli Januari, batas
+        periode Juli → 7 bulan langsung tercatat). Ikon <b>dokumen</b> membuka jadwal per bulan kalau Anda ingin posting
         satu-satu. Tiap posting membuat jurnal Debet "Beban Penyusutan", Kredit "Akumulasi Penyusutan" — akumulasi
         mengurangi nilai aset di Neraca, beban muncul di Laba Rugi. Sistem mencegah dobel posting untuk bulan yang sama.
       </div>
@@ -2763,7 +2804,7 @@ function COAView({ accounts, orgId, onChange }) {
     <div className="pop">
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
         <PageHead eyebrow="Master Data" title="Chart of Account"
-          sub={`${accounts.length} akun · kelola akun keuangan Anda`} />
+          sub={`${accounts.length} akun · berlaku untuk semua tahun buku`} />
         <button className="btn no-print" onClick={()=> showForm ? cancelForm() : setShowForm(true) }
           style={{ display:"flex", alignItems:"center", gap:6, background:showForm?C.surf:C.teal,
             color:showForm?C.sub:"#fff", padding:"9px 16px", borderRadius:9, fontSize:13, fontWeight:600, marginTop:4 }}>
