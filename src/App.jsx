@@ -5,7 +5,7 @@ import {
   Search, LogOut, RefreshCw, Wallet, ArrowDownCircle, ArrowUpCircle,
   PiggyBank, ShoppingCart, ChevronLeft, Pencil, BarChart3, X,
   TrendingDown, Lightbulb, Printer, ChevronDown, ChevronUp, Banknote,
-  Target as TargetIcon, FileText, Package, Flag, Clock, UserPlus
+  Target as TargetIcon, FileText, Package, Flag, Clock, UserPlus, Menu, Copy
 } from "lucide-react";
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -51,6 +51,7 @@ export default function App() {
   const [period, setPeriod] = useState("all");
   const [yearTick, setYearTick] = useState(YEAR); // memicu re-render saat tahun ganti
   const [loading, setLoading] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);  // sidebar di layar kecil
 
   // hubungkan setter global ke state (sekali saja)
   useEffect(() => {
@@ -146,8 +147,28 @@ export default function App() {
     <div style={{ fontFamily:"'Inter',system-ui,sans-serif", background:C.paper, minHeight:"100vh", color:C.ink }}>
       <style>{styleSheet}</style>
       <div style={{ display:"flex", minHeight:"100vh" }}>
+        {/* Topbar khusus layar kecil */}
+        <div className="mobile-topbar no-print">
+          <button className="btn" onClick={()=>setNavOpen(true)} aria-label="Buka menu"
+            style={{ background:"transparent", color:"#fff", display:"grid", placeItems:"center",
+              width:38, height:38, borderRadius:9 }}>
+            <Menu size={22} />
+          </button>
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <div style={{ width:26, height:26, borderRadius:7,
+              background:`linear-gradient(135deg,${C.teal},${C.brass})`, display:"grid",
+              placeItems:"center", fontWeight:800, color:"#fff", fontSize:13 }}>S</div>
+            <span style={{ fontWeight:700, fontSize:14.5, color:"#fff" }}>Samudra Finance</span>
+          </div>
+          <span style={{ marginLeft:"auto", fontSize:12.5, fontWeight:700, color:C.brass }}>{yearTick}</span>
+        </div>
+
+        {/* Layar gelap di belakang sidebar saat terbuka di HP */}
+        {navOpen && <div className="nav-overlay no-print" onClick={()=>setNavOpen(false)} />}
+
         {/* Sidebar */}
-        <aside style={{ width:236, background:C.deep, color:"#DDECEC", padding:"22px 14px",
+        <aside className={"sidebar" + (navOpen ? " open" : "")}
+          style={{ width:236, background:C.deep, color:"#DDECEC", padding:"22px 14px",
           position:"sticky", top:0, height:"100vh", flexShrink:0, display:"flex", flexDirection:"column" }}>
           <div style={{ display:"flex", alignItems:"center", gap:10, padding:"4px 8px 16px" }}>
             <div style={{ width:34, height:34, borderRadius:9,
@@ -155,6 +176,10 @@ export default function App() {
               placeItems:"center", fontWeight:800, color:"#fff" }}>S</div>
             <div><div style={{ fontWeight:700, fontSize:15, lineHeight:1 }}>Samudra</div>
               <div style={{ fontSize:11, color:C.brass, letterSpacing:".08em", marginTop:3 }}>FINANCE</div></div>
+            <button className="btn nav-close no-print" onClick={()=>setNavOpen(false)} aria-label="Tutup menu"
+              style={{ marginLeft:"auto", background:"transparent", color:"#AEC7C7" }}>
+              <X size={20} />
+            </button>
           </div>
 
           {/* Pilihan tahun buku */}
@@ -175,7 +200,7 @@ export default function App() {
               <div key={"s"+i} style={{ fontSize:10, letterSpacing:".12em", color:"#5F8080",
                 fontWeight:700, padding:"14px 12px 6px" }}>{n.sec}</div>
             ) : (
-              <div key={n.id} className="nav-item" onClick={() => setTab(n.id)}
+              <div key={n.id} className="nav-item" onClick={() => { setTab(n.id); setNavOpen(false); }}
                 style={{ display:"flex", alignItems:"center", gap:11, padding:"10px 12px",
                   borderRadius:9, marginBottom:2, cursor:"pointer",
                   background: tab===n.id ? C.teal : "transparent",
@@ -395,7 +420,7 @@ function PerbandinganTahun({ pnl, pnlPrev, trend, trendPrev, period, ringkas }) 
       </div>
 
       {/* Ringkasan tiga metrik utama */}
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:12, marginBottom:16 }}>
+      <div className="grid-auto" style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:12, marginBottom:16 }}>
         {baris.map(r=>{
           const g = deltaPct(r.a, r.b);
           return (
@@ -557,7 +582,7 @@ function Dashboard({ pnl, balances, trend, pnlPrev, trendPrev }) {
       <PageHead eyebrow="Beranda Keuangan" title="Ringkasan Performa" sub={`Data langsung dari database · tahun buku ${YEAR}`} />
 
       {/* KPI dengan indikator pertumbuhan */}
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom:16 }}>
+      <div className="grid-2" style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom:16 }}>
         {kpis.map(k=>(
           <div key={k.label} className="card" style={{ padding:"16px 17px" }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
@@ -584,7 +609,7 @@ function Dashboard({ pnl, balances, trend, pnlPrev, trendPrev }) {
         period="all" ringkas />
 
       {/* Tren + Komposisi beban */}
-      <div style={{ display:"grid", gridTemplateColumns:"1.6fr 1fr", gap:14, marginBottom:16 }}>
+      <div className="grid-auto" style={{ display:"grid", gridTemplateColumns:"1.6fr 1fr", gap:14, marginBottom:16 }}>
         <div className="card" style={{ padding:"18px 18px 8px" }}>
           <div style={{ fontWeight:600, fontSize:14.5 }}>Tren Pendapatan & Laba</div>
           <div style={{ fontSize:12, color:C.sub, marginBottom:8 }}>Sepanjang {YEAR}</div>
@@ -622,7 +647,7 @@ function Dashboard({ pnl, balances, trend, pnlPrev, trendPrev }) {
       </div>
 
       {/* Perbandingan cabang + laba per bulan */}
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:16 }}>
+      <div className="grid-auto" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:16 }}>
         <div className="card" style={{ padding:"18px 18px 8px" }}>
           <div style={{ fontWeight:600, fontSize:14.5, marginBottom:2 }}>Laba per Bulan</div>
           <div style={{ fontSize:12, color:C.sub, marginBottom:6 }}>Net profit {YEAR}</div>
@@ -724,7 +749,7 @@ const KATEGORI = {
 
 function Transaksi({ accounts, acctByCode, acctById, journal, orgId, onChange }) {
   const [kat, setKat] = useState(null);          // key kategori aktif
-  const [form, setForm] = useState(null);
+  const [rows, setRows] = useState([]);          // banyak baris transaksi sekaligus
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState("");
 
@@ -733,47 +758,80 @@ function Transaksi({ accounts, acctByCode, acctById, journal, orgId, onChange })
   const hutangAccounts = accounts.filter(a=>a.type==="Kewajiban" && a.is_active!==false);
   const defaultHutang = acctByCode["2-20001"]?.id || hutangAccounts[0]?.id;
 
+  const barisKosong = (contoh, opsi) => ({
+    date: contoh?.date || `${YEAR}-01-01`,
+    jumlah: "",
+    cash: contoh?.cash || "bank",
+    lawan_id: contoh?.lawan_id || opsi?.[0]?.id || "",
+    memo: "",
+    hutang_id: contoh?.hutang_id || defaultHutang,
+  });
+
   const pilihKategori = (key) => {
     setKat(key);
     const opsi = accounts.filter(a=>a.is_active!==false).filter(KATEGORI[key].filter);
-    setForm({
-      date: `${YEAR}-01-01`, jumlah: "", cash: "bank",
-      lawan_id: opsi[0]?.id || "", memo: "", hutang_id: defaultHutang,
-    });
+    setRows([barisKosong(null, opsi)]);
     setFlash("");
   };
 
+  const setRow = (i, f, v) => setRows(rows.map((r,x)=> x===i ? { ...r, [f]:v } : r));
+  const tambahBaris = () => {
+    const opsi = accounts.filter(a=>a.is_active!==false).filter(KATEGORI[kat].filter);
+    // baris baru mewarisi tanggal & sumber dana dari baris terakhir agar input cepat
+    setRows([...rows, barisKosong(rows[rows.length-1], opsi)]);
+  };
+  const duplikatBaris = (i) => {
+    const salin = { ...rows[i] };
+    setRows([...rows.slice(0,i+1), salin, ...rows.slice(i+1)]);
+  };
+  const hapusBaris = (i) => setRows(rows.filter((_,x)=>x!==i));
+
+  // baris yang siap disimpan
+  const rowValid = (r) => (+r.jumlah || 0) > 0 && r.lawan_id
+    && !(r.cash === "hutang" && !r.hutang_id);
+  const siap = rows.filter(rowValid);
+  const totalSemua = siap.reduce((s,r)=>s+(+r.jumlah||0), 0);
+
   const simpan = async () => {
     const K = KATEGORI[kat];
-    const nominal = +form.jumlah || 0;
-    if (nominal <= 0 || !form.lawan_id) return;
-    const pakaiHutang = form.cash === "hutang";
-    if (pakaiHutang && !form.hutang_id) { setFlash("✗ Pilih akun hutang dulu"); return; }
-    // akun kas/bank/hutang yang jadi lawan
-    const sumberId = pakaiHutang ? form.hutang_id
-      : (form.cash === "bank" ? bankId : kasId);
-    // Susun jurnal debet-kredit otomatis sesuai arah (SAK)
-    const lines = K.arah === "masuk"
-      ? [ { account_id: sumberId, debit: nominal, credit: 0 },
-          { account_id: form.lawan_id, debit: 0, credit: nominal } ]
-      : [ { account_id: form.lawan_id, debit: nominal, credit: 0 }, // beban/beli → akun Debet
-          { account_id: sumberId, debit: 0, credit: nominal } ];     // Kas/Bank/Hutang Kredit
-    const namaLawan = acctById[form.lawan_id]?.name || "";
-    // cash_source: bank/kas/hutang untuk penanda di riwayat
-    const cashSource = pakaiHutang ? "hutang" : form.cash;
+    if (siap.length === 0) { setFlash("✗ Belum ada baris yang lengkap"); return; }
     setBusy(true); setFlash("");
-    try {
-      await postJournal(orgId, {
-        date: form.date,
-        memo: form.memo || `${K.label} — ${namaLawan}${pakaiHutang?" (hutang)":""}`,
-        cash: cashSource,
-        lines,
-      });
-      setFlash("✓ Transaksi tersimpan & jurnal otomatis dibuat");
-      setKat(null); setForm(null);
-      onChange();
-    } catch (e) { setFlash("✗ " + e.message); }
-    finally { setBusy(false); }
+    let sukses = 0;
+    const gagal = [];
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (!rowValid(r)) continue;
+      const nominal = +r.jumlah || 0;
+      const pakaiHutang = r.cash === "hutang";
+      const sumberId = pakaiHutang ? r.hutang_id : (r.cash === "bank" ? bankId : kasId);
+      const lines = K.arah === "masuk"
+        ? [ { account_id: sumberId, debit: nominal, credit: 0 },
+            { account_id: r.lawan_id, debit: 0, credit: nominal } ]
+        : [ { account_id: r.lawan_id, debit: nominal, credit: 0 },
+            { account_id: sumberId, debit: 0, credit: nominal } ];
+      const namaLawan = acctById[r.lawan_id]?.name || "";
+      try {
+        await postJournal(orgId, {
+          date: r.date,
+          memo: r.memo || `${K.label} — ${namaLawan}${pakaiHutang?" (hutang)":""}`,
+          cash: pakaiHutang ? "hutang" : r.cash,
+          lines,
+        });
+        sukses++;
+      } catch (e) {
+        gagal.push(`baris ${i+1}: ${e.message}`);
+      }
+    }
+    setBusy(false);
+    if (gagal.length === 0) {
+      setFlash(`✓ ${sukses} transaksi tersimpan & jurnal otomatis dibuat`);
+      setKat(null); setRows([]);
+    } else {
+      // biarkan form terbuka; sisakan hanya baris yang gagal agar bisa diperbaiki
+      setFlash(`✗ ${sukses} tersimpan, ${gagal.length} gagal — ${gagal.join("; ")}`);
+      setRows(rows.filter((r,i)=> !rowValid(r) || gagal.some(g=>g.startsWith(`baris ${i+1}:`))));
+    }
+    onChange();
   };
 
   // ---- Tampilan pilih kategori ----
@@ -782,7 +840,7 @@ function Transaksi({ accounts, acctByCode, acctById, journal, orgId, onChange })
       <div className="pop">
         <PageHead eyebrow="Catat Transaksi" title="Transaksi"
           sub={`Pilih jenis transaksi — jurnal debet-kredit dibuat otomatis (sesuai SAK). Tahun buku ${YEAR}.`} />
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:20 }}>
+        <div className="grid-auto" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:20 }}>
           {Object.entries(KATEGORI).map(([key, K]) => (
             <button key={key} className="btn" onClick={() => pilihKategori(key)}
               style={{ textAlign:"left", background:"#fff", border:`1px solid ${C.line}`,
@@ -802,7 +860,7 @@ function Transaksi({ accounts, acctByCode, acctById, journal, orgId, onChange })
           fontSize:13, fontWeight:600, marginBottom:16 }}>{flash}</div>}
 
         {/* riwayat singkat */}
-        <div className="card" style={{ overflow:"hidden" }}>
+        <div className="card scroll-x" style={{ overflow:"hidden" }}>
           <div style={{ padding:"14px 18px", fontWeight:600, fontSize:14.5, borderBottom:`1px solid ${C.line}` }}>
             Transaksi Terakhir <span style={{ color:C.sub, fontWeight:400 }}>· {journal.length} entri</span></div>
           {journal.length===0 && <div style={{ padding:"18px", color:C.sub, fontSize:13 }}>Belum ada transaksi periode ini.</div>}
@@ -835,94 +893,140 @@ function Transaksi({ accounts, acctByCode, acctById, journal, orgId, onChange })
   // ---- Tampilan form kategori terpilih ----
   const K = KATEGORI[kat];
   const opsi = accounts.filter(a=>a.is_active!==false).filter(K.filter);
-  const nominal = +form.jumlah || 0;
   return (
     <div className="pop">
-      <button className="btn" onClick={()=>{setKat(null);setForm(null);}}
+      <button className="btn" onClick={()=>{setKat(null);setRows([]);}}
         style={{ display:"inline-flex", alignItems:"center", gap:6, background:"transparent",
           color:C.sub, fontSize:13, marginBottom:14, padding:"4px 0" }}>
         <ChevronLeft size={16} /> Kembali ke pilihan
       </button>
 
-      <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:20 }}>
+      <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:16, flexWrap:"wrap" }}>
         <div style={{ width:44, height:44, borderRadius:11, background:K.tone+"18", display:"grid", placeItems:"center" }}>
           <K.icon size={24} color={K.tone} /></div>
         <div>
-          <h1 style={{ margin:0, fontSize:22, fontWeight:700 }}>{K.label}</h1>
-          <div style={{ fontSize:13, color:C.sub }}>{K.arah==="masuk"?"Uang masuk":"Uang keluar"} · jurnal dibuat otomatis</div>
+          <h1 style={{ margin:0, fontSize:21, fontWeight:700 }}>{K.label}</h1>
+          <div style={{ fontSize:13, color:C.sub }}>
+            {K.arah==="masuk"?"Uang masuk":"Uang keluar"} · bisa isi banyak transaksi sekaligus</div>
         </div>
       </div>
 
-      <div className="card" style={{ padding:22, maxWidth:620 }}>
-        <div style={{ display:"flex", gap:12, marginBottom:14 }}>
-          <div style={{ flex:"0 0 150px" }}><label style={lbl}>Tanggal</label>
-            <input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} style={inp} /></div>
-          <div style={{ flex:1 }}><label style={lbl}>Jumlah (Rp)</label>
-            <input className="mono" inputMode="numeric" placeholder="0" value={form.jumlah}
-              onChange={e=>setForm({...form,jumlah:e.target.value.replace(/\D/g,"")})}
-              style={{ ...inp, fontSize:16, fontWeight:700 }} /></div>
-        </div>
+      <div style={{ fontSize:12.5, color:C.sub, marginBottom:14, lineHeight:1.6,
+        background:C.surf, padding:"11px 14px", borderRadius:9 }}>
+        Isi satu baris per transaksi, lalu tekan <b>Simpan Semua</b>. Tiap baris jadi satu jurnal
+        tersendiri, jadi tanggal dan sumber dananya boleh berbeda-beda. Baris baru otomatis
+        mengikuti tanggal & sumber dana baris terakhir supaya input massal lebih cepat.
+      </div>
 
-        <label style={lbl}>{K.lawanLabel}</label>
-        <select value={form.lawan_id} onChange={e=>setForm({...form,lawan_id:e.target.value})}
-          style={{ ...inp, marginBottom:14 }}>
-          {opsi.map(a=><option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
-        </select>
-
-        <label style={lbl}>{K.arah==="masuk"?"Uang masuk ke":"Uang keluar dari / dibayar via"}</label>
-        <select value={form.cash} onChange={e=>setForm({...form,cash:e.target.value})}
-          style={{ ...inp, marginBottom:14, fontWeight:600,
-            color:form.cash==="bank"?C.teal:form.cash==="kas"?C.kas:C.neg }}>
-          <option value="bank">Bank BCA</option>
-          <option value="kas">Kas (Petty Cash)</option>
-          {K.arah==="keluar" && hutangAccounts.length>0 &&
-            <option value="hutang">Hutang (belum dibayar)</option>}
-        </select>
-
-        {/* pilih akun hutang bila sumber = hutang */}
-        {form.cash==="hutang" && (
-          <div className="pop" style={{ marginBottom:14 }}>
-            <label style={lbl}>Catat sebagai hutang ke akun</label>
-            <select value={form.hutang_id||""} onChange={e=>setForm({...form,hutang_id:e.target.value})}
-              style={{ ...inp, fontWeight:600, color:C.neg }}>
-              {hutangAccounts.map(h=><option key={h.id} value={h.id}>{h.code} · {h.name}</option>)}
-            </select>
-            <div style={{ fontSize:11.5, color:C.sub, marginTop:6, lineHeight:1.5 }}>
-              Beban/pembelian dicatat sekarang, tapi kas belum keluar — kewajiban (hutang) Anda bertambah.
-              Saat nanti membayar, buat transaksi "Bayar Beban" dari Bank/Kas ke akun hutang ini.
+      {/* Daftar baris transaksi */}
+      {rows.map((r,i)=>{
+        const nominal = +r.jumlah || 0;
+        const valid = rowValid(r);
+        return (
+          <div key={i} className="card" style={{ padding:"14px 16px", marginBottom:10,
+            borderLeft:`4px solid ${valid ? K.tone : C.line}` }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
+              <span style={{ fontSize:11, fontWeight:700, color:C.sub, letterSpacing:".04em" }}>
+                BARIS {i+1}</span>
+              {valid && <span className="mono" style={{ fontSize:12, fontWeight:700, color:K.tone }}>
+                {money(nominal)}</span>}
+              <span style={{ marginLeft:"auto", display:"flex", gap:4 }}>
+                <button className="btn" onClick={()=>duplikatBaris(i)} title="Duplikat baris"
+                  style={{ background:"transparent", color:C.sub, display:"grid", placeItems:"center", padding:4 }}>
+                  <Copy size={15} /></button>
+                <button className="btn" onClick={()=>hapusBaris(i)} disabled={rows.length<=1}
+                  title="Hapus baris"
+                  style={{ background:"transparent", color:rows.length<=1?C.line:C.neg,
+                    display:"grid", placeItems:"center", padding:4 }}>
+                  <Trash2 size={15} /></button>
+              </span>
             </div>
+
+            <div className="row-stack" style={{ display:"grid", gridTemplateColumns:"150px 1fr", gap:10, marginBottom:10 }}>
+              <div><label style={lbl}>Tanggal</label>
+                <input type="date" value={r.date}
+                  onChange={e=>setRow(i,"date",e.target.value)} style={inp} /></div>
+              <div><label style={lbl}>Jumlah (Rp)</label>
+                <input className="mono" inputMode="numeric" placeholder="0" value={r.jumlah}
+                  onChange={e=>setRow(i,"jumlah",e.target.value.replace(/\D/g,""))}
+                  style={{ ...inp, fontSize:15, fontWeight:700 }} /></div>
+            </div>
+
+            <div className="row-stack" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
+              <div><label style={lbl}>{K.lawanLabel}</label>
+                <select value={r.lawan_id} onChange={e=>setRow(i,"lawan_id",e.target.value)} style={inp}>
+                  {opsi.map(a=><option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
+                </select></div>
+              <div><label style={lbl}>{K.arah==="masuk"?"Uang masuk ke":"Dibayar via"}</label>
+                <select value={r.cash} onChange={e=>setRow(i,"cash",e.target.value)}
+                  style={{ ...inp, fontWeight:600,
+                    color:r.cash==="bank"?C.teal:r.cash==="kas"?C.kas:C.neg }}>
+                  <option value="bank">Bank BCA</option>
+                  <option value="kas">Kas (Petty Cash)</option>
+                  {K.arah==="keluar" && hutangAccounts.length>0 &&
+                    <option value="hutang">Hutang (belum dibayar)</option>}
+                </select></div>
+            </div>
+
+            {r.cash==="hutang" && (
+              <div className="pop" style={{ marginBottom:10 }}>
+                <label style={lbl}>Catat sebagai hutang ke akun</label>
+                <select value={r.hutang_id||""} onChange={e=>setRow(i,"hutang_id",e.target.value)}
+                  style={{ ...inp, fontWeight:600, color:C.neg }}>
+                  {hutangAccounts.map(h=><option key={h.id} value={h.id}>{h.code} · {h.name}</option>)}
+                </select>
+              </div>
+            )}
+
+            <label style={lbl}>Keterangan (opsional)</label>
+            <input placeholder={`mis. ${K.label} — ${acctById[r.lawan_id]?.name || ""}`} value={r.memo}
+              onChange={e=>setRow(i,"memo",e.target.value)} style={inp} />
+
+            {nominal>0 && r.lawan_id && (
+              <div style={{ background:C.surf, borderRadius:9, padding:"10px 12px", marginTop:10, fontSize:12 }}>
+                <div style={{ color:C.sub, fontWeight:600, marginBottom:5, fontSize:10.5, letterSpacing:".05em" }}>JURNAL OTOMATIS:</div>
+                {(() => {
+                  const sumberNama = r.cash==="hutang"
+                    ? (acctById[r.hutang_id]?.name || "Hutang")
+                    : (r.cash==="bank" ? "Bank BCA" : "Kas");
+                  return K.arah==="masuk" ? <>
+                    <Auto d={sumberNama} v={nominal} side="Debet" />
+                    <Auto d={acctById[r.lawan_id]?.name} v={nominal} side="Kredit" />
+                  </> : <>
+                    <Auto d={acctById[r.lawan_id]?.name} v={nominal} side="Debet" />
+                    <Auto d={sumberNama} v={nominal} side="Kredit" />
+                  </>;
+                })()}
+              </div>
+            )}
           </div>
-        )}
+        );
+      })}
 
-        <label style={lbl}>Keterangan (opsional)</label>
-        <input placeholder={`mis. ${K.label} bulan Januari`} value={form.memo}
-          onChange={e=>setForm({...form,memo:e.target.value})} style={{ ...inp, marginBottom:18 }} />
+      <button className="btn" onClick={tambahBaris}
+        style={{ display:"inline-flex", alignItems:"center", gap:6, background:C.surf, color:C.teal,
+          padding:"10px 14px", borderRadius:9, fontSize:13.5, fontWeight:600, marginBottom:14 }}>
+        <Plus size={16} /> Tambah transaksi lagi
+      </button>
 
-        {/* ringkasan jurnal otomatis */}
-        {nominal>0 && form.lawan_id && (
-          <div style={{ background:C.surf, borderRadius:10, padding:"12px 14px", marginBottom:16, fontSize:12.5 }}>
-            <div style={{ color:C.sub, fontWeight:600, marginBottom:6, fontSize:11, letterSpacing:".05em" }}>JURNAL OTOMATIS:</div>
-            {(() => {
-              const sumberNama = form.cash==="hutang"
-                ? (acctById[form.hutang_id]?.name || "Hutang")
-                : (form.cash==="bank" ? "Bank BCA" : "Kas");
-              return K.arah==="masuk" ? <>
-                <Auto d={sumberNama} v={nominal} side="Debet" />
-                <Auto d={acctById[form.lawan_id]?.name} v={nominal} side="Kredit" />
-              </> : <>
-                <Auto d={acctById[form.lawan_id]?.name} v={nominal} side="Debet" />
-                <Auto d={sumberNama} v={nominal} side="Kredit" />
-              </>;
-            })()}
-          </div>
-        )}
-
-        <button className="btn" onClick={simpan} disabled={nominal<=0||!form.lawan_id||busy}
+      {/* Ringkasan & tombol simpan */}
+      <div className="card" style={{ padding:"14px 16px", position:"sticky", bottom:12,
+        boxShadow:"0 6px 24px rgba(0,0,0,.10)" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10, flexWrap:"wrap" }}>
+          <span style={{ fontSize:13, color:C.sub }}>
+            <b style={{ color:C.ink }}>{siap.length}</b> dari {rows.length} baris siap disimpan
+          </span>
+          <span className="mono" style={{ marginLeft:"auto", fontSize:15, fontWeight:700, color:K.tone }}>
+            Total {money(totalSemua)}
+          </span>
+        </div>
+        <button className="btn" onClick={simpan} disabled={siap.length===0||busy}
           style={{ width:"100%", padding:"13px", borderRadius:10,
-            background: nominal>0&&form.lawan_id&&!busy?K.tone:C.line, color:"#fff", fontWeight:700, fontSize:15 }}>
-          {busy?"Menyimpan…":`Simpan ${K.label}`}</button>
+            background: siap.length&&!busy?K.tone:C.line, color:"#fff", fontWeight:700, fontSize:15 }}>
+          {busy ? `Menyimpan ${siap.length} transaksi…` : `Simpan Semua (${siap.length})`}
+        </button>
         {flash && <div className="pop" style={{ marginTop:10, textAlign:"center",
-          color:flash.startsWith("✓")?C.pos:C.neg, fontSize:13, fontWeight:600 }}>{flash}</div>}
+          color:flash.startsWith("✓")?C.pos:C.neg, fontSize:12.5, fontWeight:600, lineHeight:1.5 }}>{flash}</div>}
       </div>
     </div>
   );
@@ -1098,7 +1202,7 @@ function Journal({ accounts, acctById, acctByCode, journal, orgId, onChange }) {
           Reset</button>}
       </div>
 
-      <div className="card" style={{ overflow:"hidden" }}>
+      <div className="card scroll-x" style={{ overflow:"hidden" }}>
         <div style={{ padding:"14px 18px", fontWeight:600, fontSize:14.5, borderBottom:`1px solid ${C.line}` }}>
           Riwayat Jurnal <span style={{ color:C.sub, fontWeight:400 }}>· {shown.length} entri
           {(fStart||fEnd)?" (terfilter)":" (periode ini)"}</span></div>
@@ -1196,7 +1300,7 @@ function Trial({ balances }) {
   return (
     <div className="pop">
       <PageHead eyebrow="Turunan Otomatis" title="Neraca Saldo" sub={`Total debet harus sama dengan total kredit · ${YEAR}`} />
-      <div className="card" style={{ overflow:"hidden" }}>
+      <div className="card scroll-x" style={{ overflow:"hidden" }}>
         <div style={{ display:"grid", gridTemplateColumns:"1fr 160px 160px", padding:"12px 20px",
           background:C.deep, color:"#DDECEC", fontSize:12, fontWeight:600 }}>
           <span>AKUN</span><span style={{ textAlign:"right" }}>DEBET</span><span style={{ textAlign:"right" }}>KREDIT</span></div>
@@ -1269,7 +1373,7 @@ function PnL({ pnl, pnlPrev, period }) {
           : <>Laba <b>sesungguhnya</b> — semua beban dihitung. Pakai angka ini untuk keputusan, wakaf, dividen.</>}
       </div>
 
-      <div className="card" style={{ overflow:"hidden" }}>
+      <div className="card scroll-x" style={{ overflow:"hidden" }}>
         <Section t="PENDAPATAN CABANG PROGRESIF" />
         {g("Pendapatan","Progresif").length?g("Pendapatan","Progresif").map(r=><Row key={r.code} r={r} ind/>):<Empty/>}
         <Sub l="Total Pendapatan Progresif" v={revP} />
@@ -1418,7 +1522,7 @@ function Balance({ sheet, retained, period }) {
   return (
     <div className="pop">
       <PageHead eyebrow="Turunan Otomatis" title="Neraca" sub={label} />
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+      <div className="grid-auto" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
         <div className="card" style={{ overflow:"hidden", alignSelf:"flex-start" }}>
           <div style={{ padding:"11px 20px", background:C.teal+"15", fontWeight:700, color:C.deep, fontSize:13 }}>AKTIVA</div>
           {aset.map(a=><Row key={a.code} a={a} />)}
@@ -1477,7 +1581,7 @@ function Equity({ orgId, period }) {
   return (
     <div className="pop">
       <PageHead eyebrow="Turunan Otomatis" title="Laporan Perubahan Modal" sub={`Alur ekuitas periode berjalan · ${YEAR}`} />
-      <div className="card" style={{ overflow:"hidden" }}>
+      <div className="card scroll-x" style={{ overflow:"hidden" }}>
         <R l="Modal Awal (3-30001)" v={modalAwal} />
         <R l="+ Laba Bersih periode" v={laba} tone={C.pos} />
         <R l="Modal Akhir" v={modalAkhir} strong />
@@ -1599,7 +1703,7 @@ function PertumbuhanSiswa({ orgId }) {
 
       {!loading && aktif.length>0 && <>
         {/* KPI ringkas */}
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom:16 }}>
+        <div className="grid-2" style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom:16 }}>
           <div className="card" style={{ padding:"16px 17px" }}>
             <div style={{ fontSize:12.5, color:C.sub }}>Total Pendapatan Pendaftaran</div>
             <div className="mono" style={{ fontSize:18, fontWeight:700, marginTop:6, color:C.teal }}>{money(totalPendapatan)}</div>
@@ -1753,7 +1857,7 @@ function PertumbuhanSiswa({ orgId }) {
         </div>
 
         {/* Tabel per bulan */}
-        <div className="card" style={{ overflow:"hidden" }}>
+        <div className="card scroll-x" style={{ overflow:"hidden" }}>
           <div style={{ display:"grid", gridTemplateColumns:`58px 1fr 1fr 110px 110px${biayaNum?" 100px":""}`,
             padding:"10px 18px", background:C.deep, color:"#DDECEC", fontSize:11, fontWeight:600 }}>
             <span>BULAN</span>
@@ -2061,7 +2165,7 @@ function Analisis({ pnl, balances, trend, period, pnlPrev, trendPrev }) {
       </div>
 
       {/* Tren bulanan */}
-      <div style={{ display:"grid", gridTemplateColumns:"1.5fr 1fr", gap:16, marginBottom:16 }}>
+      <div className="grid-auto" style={{ display:"grid", gridTemplateColumns:"1.5fr 1fr", gap:16, marginBottom:16 }}>
         <div className="card" style={{ padding:"18px 18px 8px" }}>
           <div style={{ fontWeight:600, fontSize:14.5, marginBottom:2 }}>Tren Pendapatan vs Beban</div>
           <div style={{ fontSize:12, color:C.sub, marginBottom:8 }}>Sepanjang {YEAR}</div>
@@ -2098,7 +2202,7 @@ function Analisis({ pnl, balances, trend, period, pnlPrev, trendPrev }) {
       {/* Perbandingan cabang */}
       <div className="card" style={{ padding:"18px 20px" }}>
         <div style={{ fontWeight:600, fontSize:14.5, marginBottom:14 }}>Perbandingan Cabang — mana lebih untung?</div>
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
+        <div className="grid-auto" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
           {[{n:"Progresif",r:revP,o:opP,k:kontribP,c:C.teal},{n:"Saraga",r:revS,o:opS,k:kontribS,c:C.brass}].map(b=>{
             const eff = b.r ? b.k/b.r : 0;
             return (
@@ -2281,7 +2385,7 @@ function TargetView({ orgId }) {
         <div style={{ height:10, borderRadius:99, background:C.surf, overflow:"hidden", marginBottom:12 }}>
           <div style={{ height:"100%", borderRadius:99, background:prog>=1?C.pos:tone,
             width:`${Math.min(100, prog*100)}%`, transition:"width .5s" }} /></div>
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, fontSize:12.5 }}>
+        <div className="grid-auto" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, fontSize:12.5 }}>
           <Cell2 l="Aktual" v={fmt(aktual)} bold />
           <Cell2 l="Target tahunan" v={fmt(tahunan)} />
           <Cell2 l="Target / bulan" v={fmt(bulanan)} />
@@ -2326,7 +2430,7 @@ function TargetView({ orgId }) {
           <div style={{ fontSize:12.5, color:C.sub, marginBottom:12 }}>
             Target ini berlaku untuk tahun buku <b>{YEAR}</b>. Ganti tahun di sidebar untuk mengatur target tahun lain.
           </div>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:14 }}>
+          <div className="grid-auto" style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:14 }}>
             <div><label style={lbl}>Target Pendapatan / tahun</label>
               <input className="mono" inputMode="numeric" placeholder="mis. 1500000000" value={form.pendapatan}
                 onChange={e=>setForm({...form,pendapatan:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
@@ -2421,7 +2525,7 @@ function TargetView({ orgId }) {
             </div>
 
             {/* Tabel detail per bulan */}
-            <div className="card" style={{ overflow:"hidden" }}>
+            <div className="card scroll-x" style={{ overflow:"hidden" }}>
               <div style={{ padding:"13px 18px", borderBottom:`1px solid ${C.line}` }}>
                 <div style={{ fontWeight:600, fontSize:14.5 }}>Ketercapaian Target per Bulan</div>
                 <div style={{ fontSize:11.5, color:C.sub, marginTop:2 }}>
@@ -2637,7 +2741,7 @@ function OwnerReport({ orgId, orgName }) {
       </div>
 
       {/* Neraca ringkas */}
-      <div className="card" style={{ overflow:"hidden" }}>
+      <div className="card scroll-x" style={{ overflow:"hidden" }}>
         <div style={{ padding:"12px 20px", background:C.deep, color:"#fff", fontWeight:700, fontSize:13.5 }}>POSISI KEUANGAN (NERACA) {YEAR}</div>
         <ORow l="Total Aset" v={aset} />
         <ORow l="Total Kewajiban (Hutang)" v={hutang} c={hutang>0?C.neg:C.sub} />
@@ -2859,7 +2963,7 @@ function Deferred({ orgId, acctByCode, accounts, onChange }) {
               <input placeholder="mis. Paket 3 bulan batch Januari" value={form.description}
                 onChange={e=>setForm({...form,description:e.target.value})} style={inp} /></div>
           </div>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:14 }}>
+          <div className="grid-auto" style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:14 }}>
             <div><label style={lbl}>Total Diterima (Rp)</label>
               <input className="mono" inputMode="numeric" placeholder="9000000" value={form.total_amount}
                 onChange={e=>setForm({...form,total_amount:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
@@ -2885,7 +2989,7 @@ function Deferred({ orgId, acctByCode, accounts, onChange }) {
       {flash && <div className="pop" style={{ textAlign:"center", marginBottom:14,
         color:flash.startsWith("✓")?C.pos:C.neg, fontSize:13, fontWeight:600 }}>{flash}</div>}
 
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:14, marginBottom:16 }}>
+      <div className="grid-auto" style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:14, marginBottom:16 }}>
         <div className="card" style={{ padding:"16px 18px" }}>
           <div style={{ fontSize:12.5, color:C.sub }}>Total Diterima</div>
           <div className="mono" style={{ fontSize:19, fontWeight:700, marginTop:6 }}>{money(totalDiterima)}</div></div>
@@ -2897,7 +3001,7 @@ function Deferred({ orgId, acctByCode, accounts, onChange }) {
           <div className="mono" style={{ fontSize:19, fontWeight:700, marginTop:6, color:C.brass }}>{money(totalSisa)}</div></div>
       </div>
 
-      <div className="card" style={{ overflow:"hidden" }}>
+      <div className="card scroll-x" style={{ overflow:"hidden" }}>
         <div style={{ display:"grid", gridTemplateColumns:"1.6fr 110px 80px 110px 110px 120px", padding:"11px 18px",
           background:C.deep, color:"#DDECEC", fontSize:11.5, fontWeight:600 }}>
           <span>KETERANGAN</span>
@@ -3046,7 +3150,7 @@ function AsetTetap({ orgId, acctByCode, accounts }) {
         <div className="card pop" style={{ padding:20, marginBottom:16, border:`2px solid ${editId?C.brass:C.teal}` }}>
           {editId && <div style={{ marginBottom:12, fontSize:13, fontWeight:600, color:C.brass }}>
             <Pencil size={14} style={{ verticalAlign:"-2px", marginRight:6 }} />Edit aset</div>}
-          <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr", gap:12, marginBottom:12 }}>
+          <div className="grid-auto" style={{ display:"grid", gridTemplateColumns:"2fr 1fr", gap:12, marginBottom:12 }}>
             <div><label style={lbl}>Nama Aset</label>
               <input placeholder="mis. Alat Latihan Renang" value={form.name}
                 onChange={e=>setForm({...form,name:e.target.value})} style={inp} /></div>
@@ -3084,7 +3188,7 @@ function AsetTetap({ orgId, acctByCode, accounts }) {
         color:flash.startsWith("✓")?C.pos:C.neg, fontSize:13, fontWeight:600 }}>{flash}</div>}
 
       {/* ringkasan */}
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:14, marginBottom:16 }}>
+      <div className="grid-auto" style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:14, marginBottom:16 }}>
         <div className="card" style={{ padding:"16px 18px" }}>
           <div style={{ fontSize:12.5, color:C.sub }}>Total Harga Perolehan</div>
           <div className="mono" style={{ fontSize:19, fontWeight:700, marginTop:6 }}>{money(totalCost)}</div></div>
@@ -3097,7 +3201,7 @@ function AsetTetap({ orgId, acctByCode, accounts }) {
       </div>
 
       {/* daftar aset */}
-      <div className="card" style={{ overflow:"hidden" }}>
+      <div className="card scroll-x" style={{ overflow:"hidden" }}>
         <div style={{ display:"grid", gridTemplateColumns:"1.5fr 105px 95px 70px 105px 110px 160px", padding:"11px 18px",
           background:C.deep, color:"#DDECEC", fontSize:11.5, fontWeight:600 }}>
           <span>NAMA ASET</span>
@@ -3282,7 +3386,7 @@ function COAView({ accounts, orgId, onChange }) {
               <input placeholder="mis. Biaya Perawatan Kolam" value={form.name}
                 onChange={e=>setForm({...form,name:e.target.value})} style={inp} /></div>
           </div>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:12 }}>
+          <div className="grid-auto" style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:12 }}>
             <div><label style={lbl}>Tipe</label>
               <select value={form.type} disabled={editUsed} onChange={e=>{
                 const t=e.target.value;
@@ -3303,7 +3407,7 @@ function COAView({ accounts, orgId, onChange }) {
                 <option value="bank">Bank</option>
                 <option value="kas">Kas</option></select></div>
           </div>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:14 }}>
+          <div className="grid-auto" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:14 }}>
             <div><label style={lbl}>Saldo Normal</label>
               <select value={form.normal_side} disabled={editUsed} onChange={e=>setForm({...form,normal_side:e.target.value})}
                 style={{ ...inp, background:editUsed?C.surf:"#fff" }}>
@@ -3336,7 +3440,7 @@ function COAView({ accounts, orgId, onChange }) {
         <input placeholder="Cari akun…" value={q} onChange={e=>setQ(e.target.value)}
           style={{ border:"none", outline:"none", fontSize:13.5, flex:1, background:"transparent" }} /></div>
 
-      <div className="card" style={{ overflow:"hidden" }}>
+      <div className="card scroll-x" style={{ overflow:"hidden" }}>
         <div style={{ display:"grid", gridTemplateColumns:"105px 1fr 120px 50px 55px 110px", padding:"11px 18px",
           background:C.deep, color:"#DDECEC", fontSize:12, fontWeight:600 }}>
           <span>KODE</span><span>NAMA AKUN</span><span>TIPE</span><span>SN</span><span>SUMBER</span>
@@ -3395,6 +3499,47 @@ const styleSheet = `
   .spin{animation:spin 1s linear infinite}
   ::-webkit-scrollbar{width:8px;height:8px}
   ::-webkit-scrollbar-thumb{background:${C.line};border-radius:8px}
+
+  /* ---- topbar & sidebar: desktop ---- */
+  .mobile-topbar{ display:none }
+  .nav-close{ display:none }
+
+  /* ---- layar kecil ---- */
+  @media (max-width: 900px) {
+    .mobile-topbar{
+      display:flex; align-items:center; gap:10px;
+      position:fixed; top:0; left:0; right:0; height:54px; z-index:60;
+      background:${C.deep}; padding:0 12px;
+      box-shadow:0 2px 10px rgba(0,0,0,.18);
+    }
+    .nav-close{ display:block }
+    .sidebar{
+      position:fixed !important; top:0; left:0; z-index:70;
+      transform:translateX(-105%); transition:transform .22s ease;
+      box-shadow:0 0 40px rgba(0,0,0,.35);
+    }
+    .sidebar.open{ transform:translateX(0) }
+    .nav-overlay{
+      position:fixed; inset:0; background:rgba(8,26,26,.55); z-index:65;
+    }
+    main{ padding:68px 14px 28px !important; max-width:100% !important }
+
+    /* grid otomatis jadi satu kolom */
+    .grid-auto{ grid-template-columns:1fr !important }
+    .grid-2{ grid-template-columns:repeat(2,1fr) !important }
+
+    /* tabel lebar bisa digeser ke samping */
+    .scroll-x{ overflow-x:auto !important; -webkit-overflow-scrolling:touch }
+    .scroll-x > *{ min-width:640px }
+
+    /* baris form transaksi menumpuk */
+    .row-stack{ grid-template-columns:1fr !important }
+  }
+
+  @media (max-width: 520px) {
+    .grid-2{ grid-template-columns:1fr !important }
+  }
+
   @media print {
     aside, .no-print { display: none !important; }
     main { padding: 0 !important; max-width: 100% !important; }
