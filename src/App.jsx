@@ -323,16 +323,53 @@ function PageHead({ eyebrow, title, sub }) {
 /* ---- helpers untuk agregasi hasil RPC ---- */
 const sumBy = (rows, pred) => rows.filter(pred).reduce((s,r)=>s+Number(r.amount||r.balance||0),0);
 
+/* ============================================================
+   CABANG — dikelola dinamis supaya cabang baru otomatis terhitung
+   di seluruh laporan tanpa mengubah kode lagi.
+   ============================================================ */
+const CABANG_DIKENAL = ["Progresif", "Saraga", "The Trans"];
+const PALET_CABANG = [C.teal, C.brass, C.kas, C.pos, C.neg, C.deep];
+
+// warna konsisten per cabang (berdasarkan urutan daftar)
+function warnaCabang(nama, daftar) {
+  const i = daftar.indexOf(nama);
+  return PALET_CABANG[(i < 0 ? 0 : i) % PALET_CABANG.length];
+}
+
+// kumpulkan nama cabang dari hasil rpcPnl / accounts (field `branch`)
+function daftarCabang(...sumber) {
+  const set = new Set();
+  sumber.forEach(rows => (rows||[]).forEach(r => { if (r && r.branch) set.add(r.branch); }));
+  const ada = [...set];
+  // urutkan: cabang yang sudah dikenal dulu (urutan tetap), sisanya alfabetis
+  const dikenal = CABANG_DIKENAL.filter(c => ada.includes(c));
+  const lainnya = ada.filter(c => !CABANG_DIKENAL.includes(c)).sort();
+  return [...dikenal, ...lainnya];
+}
+
+// ringkasan pendapatan / beban operasional / kontribusi laba per cabang
+function perCabang(pnlRows) {
+  const nama = daftarCabang(pnlRows);
+  const S = (type, branch) => (pnlRows||[])
+    .filter(r=>r.type===type && r.branch===branch)
+    .reduce((s,r)=>s+Number(r.amount),0);
+  return nama.map(n=>{
+    const rev = S("Pendapatan", n);
+    const op  = S("Beban Op", n);
+    return { nama:n, rev, op, kontrib: rev-op, warna: warnaCabang(n, nama) };
+  });
+}
+
 /* ---- ringkasan Laba Rugi dari hasil rpcPnl (dipakai untuk YoY) ---- */
 function ringkasPnl(rows) {
   const S = (type,branch) => (rows||[]).filter(r=>r.type===type&&(!branch||r.branch===branch))
     .reduce((s,r)=>s+Number(r.amount),0);
-  const rev=S("Pendapatan"), revP=S("Pendapatan","Progresif"), revS=S("Pendapatan","Saraga");
-  const cogs=S("COGS"), opBank=S("Beban Op"), opP=S("Beban Op","Progresif"), opS=S("Beban Op","Saraga");
+  const rev=S("Pendapatan");
+  const cogs=S("COGS"), opBank=S("Beban Op");
   const kasBeban=S("Beban Kas"), oi=S("Other Income"), oe=S("Other Expense");
   const totalBeban=cogs+opBank+kasBeban+oe;
   const laba=rev-totalBeban+oi;
-  return { rev, revP, revS, cogs, opBank, opP, opS, kasBeban, oi, oe, totalBeban, laba,
+  return { rev, cogs, opBank, kasBeban, oi, oe, totalBeban, laba,
     npm: rev ? laba/rev : 0 };
 }
 
@@ -514,10 +551,8 @@ function PerbandinganTahun({ pnl, pnlPrev, trend, trendPrev, period, ringkas }) 
 // ============================================================
 function Dashboard({ pnl, balances, trend, pnlPrev, trendPrev }) {
   const rev = sumBy(pnl, r=>r.type==="Pendapatan");
-  const revP = sumBy(pnl, r=>r.type==="Pendapatan"&&r.branch==="Progresif");
-  const revS = sumBy(pnl, r=>r.type==="Pendapatan"&&r.branch==="Saraga");
-  const opP = sumBy(pnl, r=>r.type==="Beban Op"&&r.branch==="Progresif");
-  const opS = sumBy(pnl, r=>r.type==="Beban Op"&&r.branch==="Saraga");
+  const cabang = perCabang(pnl);
+  const totalRevCabang = cabang.reduce((s,b)=>s+b.rev,0);
   const opBank = sumBy(pnl, r=>r.type==="Beban Op");
   const kasBeban = sumBy(pnl, r=>r.type==="Beban Kas");
   const cogs = sumBy(pnl, r=>r.type==="COGS");
@@ -568,7 +603,8 @@ function Dashboard({ pnl, balances, trend, pnlPrev, trendPrev }) {
   const yoyProfit = deltaPct(profit, lalu.laba);
 
   const kpis = [
-    { label:"Pendapatan", val:rev, tone:C.teal, sub:"Progresif + Saraga", g:gRev,
+    { label:"Pendapatan", val:rev, tone:C.teal,
+      sub: cabang.length ? cabang.map(b=>b.nama).join(" + ") : "Semua cabang", g:gRev,
       yoy:yoyRev, yoyVal:lalu.rev },
     { label:"Total Beban", val:opBank+kasBeban+cogs, tone:C.neg, sub:"Bank + Kas", g:null,
       yoy:yoyBeban, yoyVal:lalu.totalBeban, terbalik:true },
@@ -663,20 +699,23 @@ function Dashboard({ pnl, balances, trend, pnlPrev, trendPrev }) {
         </div>
         <div className="card" style={{ padding:"16px 18px" }}>
           <div style={{ fontWeight:600, fontSize:14.5, marginBottom:12 }}>Perbandingan Cabang</div>
-          {[{n:"Progresif",r:revP,o:opP,c:C.teal},{n:"Saraga",r:revS,o:opS,c:C.brass}].map(b=>(
-            <div key={b.n} style={{ marginBottom:12 }}>
+          {cabang.length===0 && <div style={{ fontSize:12.5, color:C.sub, padding:"10px 0" }}>
+            Belum ada pendapatan per cabang pada periode ini.</div>}
+          {cabang.map(b=>(
+            <div key={b.nama} style={{ marginBottom:12 }}>
               <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
-                <div style={{ width:8, height:8, borderRadius:99, background:b.c }} />
-                <span style={{ fontWeight:600, fontSize:13 }}>Cabang {b.n}</span>
-                <span className="mono" style={{ marginLeft:"auto", fontWeight:700, fontSize:13, color:C.pos }}>{money(b.r-b.o)}</span>
+                <div style={{ width:8, height:8, borderRadius:99, background:b.warna }} />
+                <span style={{ fontWeight:600, fontSize:13 }}>Cabang {b.nama}</span>
+                <span className="mono" style={{ marginLeft:"auto", fontWeight:700, fontSize:13,
+                  color:b.kontrib>=0?C.pos:C.neg }}>{money(b.kontrib)}</span>
               </div>
               <div style={{ height:8, borderRadius:99, background:C.surf, overflow:"hidden" }}>
-                <div style={{ height:"100%", borderRadius:99, background:b.c,
-                  width: `${Math.min(100, (revP+revS)? (b.r/(revP+revS))*100 : 0)}%` }} />
+                <div style={{ height:"100%", borderRadius:99, background:b.warna,
+                  width: `${Math.min(100, totalRevCabang ? (b.rev/totalRevCabang)*100 : 0)}%` }} />
               </div>
               <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:C.sub, marginTop:4 }}>
-                <span>Pendapatan {moneyShort(b.r)}</span>
-                <span>Operasional {moneyShort(b.o)}</span>
+                <span>Pendapatan {moneyShort(b.rev)}</span>
+                <span>Operasional {moneyShort(b.op)}</span>
               </div>
             </div>
           ))}
@@ -1330,8 +1369,9 @@ function PnL({ pnl, pnlPrev, period }) {
   const g = (type,branch) => pnl.filter(r=>r.type===type&&(!branch||r.branch===branch));
   const S = (type,branch) => g(type,branch).reduce((s,r)=>s+Number(r.amount),0);
 
-  const revP=S("Pendapatan","Progresif"), revS=S("Pendapatan","Saraga"), rev=S("Pendapatan");
-  const cogs=S("COGS"), opP=S("Beban Op","Progresif"), opS=S("Beban Op","Saraga"), opBank=S("Beban Op");
+  const rev=S("Pendapatan");
+  const cabang = perCabang(pnl);
+  const cogs=S("COGS"), opBank=S("Beban Op");
   const kasBeban=S("Beban Kas"), oi=S("Other Income"), oe=S("Other Expense");
   const grossProfit=rev-cogs, afterOp=grossProfit-opBank-kasBeban, profitFull=afterOp+oi-oe;
   const profitBank=rev-opBank+oi-oe;
@@ -1374,12 +1414,19 @@ function PnL({ pnl, pnlPrev, period }) {
       </div>
 
       <div className="card scroll-x" style={{ overflow:"hidden" }}>
-        <Section t="PENDAPATAN CABANG PROGRESIF" />
-        {g("Pendapatan","Progresif").length?g("Pendapatan","Progresif").map(r=><Row key={r.code} r={r} ind/>):<Empty/>}
-        <Sub l="Total Pendapatan Progresif" v={revP} />
-        <Section t="PENDAPATAN CABANG SARAGA" />
-        {g("Pendapatan","Saraga").length?g("Pendapatan","Saraga").map(r=><Row key={r.code} r={r} ind/>):<Empty/>}
-        <Sub l="Total Pendapatan Saraga" v={revS} />
+        {cabang.map(b=>(
+          <React.Fragment key={"rev-"+b.nama}>
+            <Section t={`PENDAPATAN CABANG ${b.nama.toUpperCase()}`} />
+            {g("Pendapatan",b.nama).length
+              ? g("Pendapatan",b.nama).map(r=><Row key={r.code} r={r} ind/>)
+              : <Empty/>}
+            <Sub l={`Total Pendapatan ${b.nama}`} v={b.rev} />
+          </React.Fragment>
+        ))}
+        {g("Pendapatan","").length>0 && <>
+          <Section t="PENDAPATAN UMUM (tanpa cabang)" />
+          {pnl.filter(r=>r.type==="Pendapatan" && !r.branch).map(r=><Row key={r.code} r={r} ind/>)}
+        </>}
         <Sub l="TOTAL PENDAPATAN KOTOR SAMUDRA" v={rev} tone={C.pos} />
 
         {!bankOnly && <>
@@ -1389,12 +1436,19 @@ function PnL({ pnl, pnlPrev, period }) {
           <Sub l="LABA KOTOR" v={grossProfit} strong />
         </>}
 
-        <Section t="BIAYA OPERASIONAL PROGRESIF (dari Bank)" />
-        {g("Beban Op","Progresif").length?g("Beban Op","Progresif").map(r=><Row key={r.code} r={r} ind/>):<Empty/>}
-        <Sub l="Total Operasional Progresif" v={opP} tone={C.neg} />
-        <Section t="BIAYA OPERASIONAL SARAGA (dari Bank)" />
-        {g("Beban Op","Saraga").length?g("Beban Op","Saraga").map(r=><Row key={r.code} r={r} ind/>):<Empty/>}
-        <Sub l="Total Operasional Saraga" v={opS} tone={C.neg} />
+        {cabang.map(b=>(
+          <React.Fragment key={"op-"+b.nama}>
+            <Section t={`BIAYA OPERASIONAL ${b.nama.toUpperCase()} (dari Bank)`} />
+            {g("Beban Op",b.nama).length
+              ? g("Beban Op",b.nama).map(r=><Row key={r.code} r={r} ind/>)
+              : <Empty/>}
+            <Sub l={`Total Operasional ${b.nama}`} v={b.op} tone={C.neg} />
+          </React.Fragment>
+        ))}
+        {pnl.filter(r=>r.type==="Beban Op" && !r.branch).length>0 && <>
+          <Section t="BIAYA OPERASIONAL UMUM (tanpa cabang)" />
+          {pnl.filter(r=>r.type==="Beban Op" && !r.branch).map(r=><Row key={r.code} r={r} ind/>)}
+        </>}
 
         {!bankOnly && <>
           <Section t="BEBAN UMUM & ADMIN (dari Kas)" tone={C.kas} />
@@ -1611,16 +1665,28 @@ function PertumbuhanSiswa({ orgId }) {
 
   const biayaNum = +biaya || 0;
 
+  // daftar cabang yang muncul di data pendaftaran (dua tahun sekaligus)
+  const namaCabang = (() => {
+    const set = new Set();
+    [...(rows||[]), ...(rowsPrev||[])].forEach(r=>{ if (r.cabang) set.add(r.cabang); });
+    const ada = [...set];
+    const dikenal = CABANG_DIKENAL.filter(c=>ada.includes(c));
+    return [...dikenal, ...ada.filter(c=>!CABANG_DIKENAL.includes(c)).sort()];
+  })();
+
   // agregasi per bulan (gabung cabang) — dipakai untuk tahun manapun
   const agregasi = (src) => MONTHS.map((nama,i)=>{
     const bln = i+1;
     const data = (src||[]).filter(r=>Number(r.bulan)===bln);
     const pendapatan = data.reduce((s,r)=>s+Number(r.pendapatan),0);
     const transaksi = data.reduce((s,r)=>s+Number(r.jml_transaksi),0);
-    const prog = data.filter(r=>r.cabang==="Progresif").reduce((s,r)=>s+Number(r.pendapatan),0);
-    const sar = data.filter(r=>r.cabang==="Saraga").reduce((s,r)=>s+Number(r.pendapatan),0);
+    // rincian per cabang, apa pun nama cabangnya
+    const perCab = {};
+    namaCabang.forEach(c=>{
+      perCab[c] = data.filter(r=>r.cabang===c).reduce((s,r)=>s+Number(r.pendapatan),0);
+    });
     const siswa = biayaNum ? Math.round(pendapatan/biayaNum) : null;
-    return { nama:nama.slice(0,3), bln, pendapatan, transaksi, prog, sar, siswa };
+    return { nama:nama.slice(0,3), bln, pendapatan, transaksi, perCab, siswa };
   });
 
   const perBulan = agregasi(rows);
@@ -1857,31 +1923,39 @@ function PertumbuhanSiswa({ orgId }) {
         </div>
 
         {/* Tabel per bulan */}
-        <div className="card scroll-x" style={{ overflow:"hidden" }}>
-          <div style={{ display:"grid", gridTemplateColumns:`58px 1fr 1fr 110px 110px${biayaNum?" 100px":""}`,
-            padding:"10px 18px", background:C.deep, color:"#DDECEC", fontSize:11, fontWeight:600 }}>
-            <span>BULAN</span>
-            <span style={{ textAlign:"right" }}>PENDAFTARAN PROGRESIF</span>
-            <span style={{ textAlign:"right" }}>PENDAFTARAN SARAGA</span>
-            <span style={{ textAlign:"right" }}>TOTAL</span>
-            <span style={{ textAlign:"center" }}>TRANSAKSI</span>
-            {biayaNum ? <span style={{ textAlign:"center" }}>EST. SISWA</span> : null}
-          </div>
-          {aktif.map(m=>(
-            <div key={m.bln} style={{ display:"grid", gridTemplateColumns:`58px 1fr 1fr 110px 110px${biayaNum?" 100px":""}`,
-              padding:"9px 18px", borderBottom:`1px solid ${C.line}`, fontSize:12.5, alignItems:"center" }}>
-              <span style={{ fontWeight:600, color:C.deep }}>{m.nama}</span>
-              <span className="mono" style={{ textAlign:"right", color:C.sub }}>{m.prog?money(m.prog):"–"}</span>
-              <span className="mono" style={{ textAlign:"right", color:C.sub }}>{m.sar?money(m.sar):"–"}</span>
-              <span className="mono" style={{ textAlign:"right", fontWeight:700, color:C.teal }}>{money(m.pendapatan)}</span>
-              <span className="mono" style={{ textAlign:"center" }}>{m.transaksi}</span>
-              {biayaNum ? <span className="mono" style={{ textAlign:"center", fontWeight:700, color:C.brass }}>{m.siswa}</span> : null}
+        {(() => {
+          const kolom = `58px ${namaCabang.map(()=>"1fr").join(" ")} 110px 110px${biayaNum?" 100px":""}`;
+          return (
+            <div className="card scroll-x" style={{ overflow:"hidden" }}>
+              <div style={{ display:"grid", gridTemplateColumns:kolom,
+                padding:"10px 18px", background:C.deep, color:"#DDECEC", fontSize:11, fontWeight:600 }}>
+                <span>BULAN</span>
+                {namaCabang.map(c=>(
+                  <span key={c} style={{ textAlign:"right" }}>{c.toUpperCase()}</span>
+                ))}
+                <span style={{ textAlign:"right" }}>TOTAL</span>
+                <span style={{ textAlign:"center" }}>TRANSAKSI</span>
+                {biayaNum ? <span style={{ textAlign:"center" }}>EST. SISWA</span> : null}
+              </div>
+              {aktif.map(m=>(
+                <div key={m.bln} style={{ display:"grid", gridTemplateColumns:kolom,
+                  padding:"9px 18px", borderBottom:`1px solid ${C.line}`, fontSize:12.5, alignItems:"center" }}>
+                  <span style={{ fontWeight:600, color:C.deep }}>{m.nama}</span>
+                  {namaCabang.map(c=>(
+                    <span key={c} className="mono" style={{ textAlign:"right", color:C.sub }}>
+                      {m.perCab[c] ? money(m.perCab[c]) : "–"}</span>
+                  ))}
+                  <span className="mono" style={{ textAlign:"right", fontWeight:700, color:C.teal }}>{money(m.pendapatan)}</span>
+                  <span className="mono" style={{ textAlign:"center" }}>{m.transaksi}</span>
+                  {biayaNum ? <span className="mono" style={{ textAlign:"center", fontWeight:700, color:C.brass }}>{m.siswa}</span> : null}
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          );
+        })()}
         <div style={{ fontSize:11.5, color:C.sub, marginTop:12, lineHeight:1.6 }}>
-          <b>Catatan:</b> analisis ini berbasis transaksi ke akun <b>Pendapatan Pendaftaran Siswa Baru</b> (Progresif & Saraga)
-          di aplikasi keuangan ini. "Estimasi Siswa" dihitung dari total pendapatan pendaftaran ÷ biaya per siswa yang Anda isi,
+          <b>Catatan:</b> analisis ini berbasis transaksi ke akun <b>Pendapatan Pendaftaran Siswa Baru</b> di seluruh
+          cabang{namaCabang.length ? ` (${namaCabang.join(", ")})` : ""}. "Estimasi Siswa" dihitung dari total pendapatan pendaftaran ÷ biaya per siswa yang Anda isi,
           jadi akurat kalau biaya pendaftaran seragam. Untuk data siswa per individu (nama, tanggal daftar), gunakan aplikasi
           manajemen siswa Anda yang terpisah.
         </div>
@@ -1896,8 +1970,11 @@ function PertumbuhanSiswa({ orgId }) {
 function Analisis({ pnl, balances, trend, period, pnlPrev, trendPrev }) {
   const S = (type,branch) => pnl.filter(r=>r.type===type&&(!branch||r.branch===branch))
     .reduce((s,r)=>s+Number(r.amount),0);
-  const rev=S("Pendapatan"), revP=S("Pendapatan","Progresif"), revS=S("Pendapatan","Saraga");
-  const cogs=S("COGS"), opBank=S("Beban Op"), opP=S("Beban Op","Progresif"), opS=S("Beban Op","Saraga");
+  const rev=S("Pendapatan");
+  const cabang = perCabang(pnl);
+  const opCabang = cabang.reduce((s,b)=>s+b.op,0);   // total gaji pelatih/operasional semua cabang
+  const totalKontrib = cabang.reduce((s,b)=>s+b.kontrib,0);
+  const cogs=S("COGS"), opBank=S("Beban Op");
   const kasBeban=S("Beban Kas"), oi=S("Other Income"), oe=S("Other Expense");
   const totalBeban=cogs+opBank+kasBeban+oe;
   const laba=rev-totalBeban+oi;
@@ -1906,14 +1983,16 @@ function Analisis({ pnl, balances, trend, period, pnlPrev, trendPrev }) {
   // rasio
   const npm = rev ? laba/rev : 0;                        // net profit margin
   const gpm = rev ? labaKotor/rev : 0;                   // gross profit margin
-  const coachRatio = rev ? (opP+opS)/rev : 0;            // biaya pelatih thd pendapatan
+  const coachRatio = rev ? opCabang/rev : 0;            // biaya pelatih semua cabang thd pendapatan
   const bebanRatio = rev ? totalBeban/rev : 0;           // efisiensi beban
   const modal = balances.filter(b=>b.type==="Ekuitas").reduce((s,b)=>s+Number(b.balance),0);
   const roi = modal ? laba/modal : 0;
 
-  // per cabang
-  const kontribP = revP-opP, kontribS = revS-opS;
-  const totalKontrib = kontribP+kontribS;
+  // efisiensi per cabang (laba per rupiah pendapatan) — hanya cabang yang sudah ada pendapatan
+  const cabangAktif = cabang.filter(b=>b.rev>0)
+    .map(b=>({ ...b, eff: b.kontrib/Math.max(b.rev,1) }))
+    .sort((a,b)=>b.eff-a.eff);
+  const cabangBelumAda = cabang.filter(b=>b.rev===0);
 
   // insight otomatis
   const insights = [];
@@ -1926,11 +2005,12 @@ function Analisis({ pnl, balances, trend, period, pnlPrev, trendPrev }) {
     if (coachRatio > 0.5) insights.push({ t:"warn", m:`Biaya pelatih ${pct(coachRatio)} dari pendapatan — cukup tinggi (>50%). Cek rasio pelatih terhadap jumlah siswa.` });
     else if (coachRatio > 0) insights.push({ t:"good", m:`Biaya pelatih ${pct(coachRatio)} dari pendapatan, masih dalam batas wajar.` });
 
-    if (revP>0 && revS>0) {
-      const lebihUntung = kontribP/Math.max(revP,1) > kontribS/Math.max(revS,1) ? "Progresif" : "Saraga";
-      insights.push({ t:"info", m:`Cabang ${lebihUntung} memberi kontribusi laba lebih efisien per rupiah pendapatan. Fokuskan pertumbuhan di sana.` });
+    if (cabangAktif.length >= 2) {
+      const juara = cabangAktif[0], buncit = cabangAktif[cabangAktif.length-1];
+      insights.push({ t:"info", m:`Cabang ${juara.nama} memberi kontribusi laba paling efisien per rupiah pendapatan (${pct(juara.eff)}), terendah ${buncit.nama} (${pct(buncit.eff)}). Fokuskan pertumbuhan di cabang yang efisiensinya tinggi.` });
     }
-    if (revS===0 && revP>0) insights.push({ t:"info", m:"Cabang Saraga belum ada pendapatan periode ini. Bandingkan setelah keduanya aktif." });
+    if (cabangBelumAda.length > 0 && cabangAktif.length > 0)
+      insights.push({ t:"info", m:`Cabang ${cabangBelumAda.map(b=>b.nama).join(", ")} belum ada pendapatan periode ini. Bandingkan setelah semuanya aktif.` });
 
     // tren: bandingkan bulan yang dipilih vs bulan sebelumnya (urut numerik, aman)
     const byMonth = [...(trend||[])]
@@ -2037,16 +2117,20 @@ function Analisis({ pnl, balances, trend, period, pnlPrev, trendPrev }) {
         `Total kewajiban ${money(hutang)} relatif besar dibanding laba periode. Prioritaskan pelunasan hutang berbunga (mis. pinjaman bank) untuk mengurangi beban bunga ke depan.`);
 
     // --- PERTUMBUHAN: cabang ---
-    if (revP>0 && revS>0) {
-      const effP = kontribP/Math.max(revP,1), effS = kontribS/Math.max(revS,1);
-      const menang = effP>effS ? "Progresif" : "Saraga";
-      const kalah = effP>effS ? "Saraga" : "Progresif";
-      add(3, "Pertumbuhan", `Cabang ${menang} lebih efisien — jadikan model`,
-        `Cabang ${menang} menghasilkan laba lebih besar per rupiah pendapatan. Pelajari apa yang membuatnya unggul (lokasi, pelatih, jadwal, marketing) dan terapkan pola itu di cabang ${kalah}. Fokuskan anggaran marketing ke cabang dengan potensi tertinggi.`);
+    if (cabangAktif.length >= 2) {
+      const menang = cabangAktif[0], kalah = cabangAktif[cabangAktif.length-1];
+      add(3, "Pertumbuhan", `Cabang ${menang.nama} lebih efisien — jadikan model`,
+        `Cabang ${menang.nama} menghasilkan ${pct(menang.eff)} laba per rupiah pendapatan, sementara ${kalah.nama} ${pct(kalah.eff)}. Pelajari apa yang membuat ${menang.nama} unggul (lokasi, pelatih, jadwal, marketing) dan terapkan pola itu di cabang lain. Fokuskan anggaran marketing ke cabang dengan potensi tertinggi.`);
+
+      // cabang yang kontribusinya negatif = merugi
+      const merugi = cabangAktif.filter(b=>b.kontrib < 0);
+      if (merugi.length > 0)
+        add(1, "Keuangan", `Cabang ${merugi.map(b=>b.nama).join(", ")} merugi`,
+          `Biaya operasional cabang ini melebihi pendapatannya (${merugi.map(b=>`${b.nama}: ${money(b.kontrib)}`).join("; ")}). Untuk cabang baru hal ini wajar di masa rintisan, tapi tetapkan target kapan harus impas. Periksa jumlah siswa aktif, tarif, dan beban tetap seperti sewa kolam.`);
     }
-    if (revS===0 && revP>0)
-      add(2, "Pertumbuhan", "Cabang Saraga belum menghasilkan",
-        "Cabang Saraga belum ada pendapatan periode ini. Evaluasi: apakah butuh dorongan marketing, perbaikan jadwal, atau ada kendala operasional yang perlu diatasi.");
+    if (cabangBelumAda.length > 0 && cabangAktif.length > 0)
+      add(2, "Pertumbuhan", `Cabang ${cabangBelumAda.map(b=>b.nama).join(", ")} belum menghasilkan`,
+        `Belum ada pendapatan tercatat periode ini untuk cabang tersebut. Evaluasi: apakah butuh dorongan marketing, perbaikan jadwal, atau ada kendala operasional. Kalau cabang baru saja dibuka, pastikan transaksinya sudah dicatat ke akun pendapatan cabang yang benar.`);
 
     // --- PERTUMBUHAN: tren pendapatan ---
     if (revGrowth !== null && revGrowth < 0)
@@ -2201,24 +2285,32 @@ function Analisis({ pnl, balances, trend, period, pnlPrev, trendPrev }) {
 
       {/* Perbandingan cabang */}
       <div className="card" style={{ padding:"18px 20px" }}>
-        <div style={{ fontWeight:600, fontSize:14.5, marginBottom:14 }}>Perbandingan Cabang — mana lebih untung?</div>
-        <div className="grid-auto" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
-          {[{n:"Progresif",r:revP,o:opP,k:kontribP,c:C.teal},{n:"Saraga",r:revS,o:opS,k:kontribS,c:C.brass}].map(b=>{
-            const eff = b.r ? b.k/b.r : 0;
+        <div style={{ fontWeight:600, fontSize:14.5, marginBottom:4 }}>Perbandingan Cabang — mana lebih untung?</div>
+        <div style={{ fontSize:12, color:C.sub, marginBottom:14 }}>
+          {cabang.length} cabang terdaftar · kontribusi laba = pendapatan − biaya operasional cabang
+        </div>
+        {cabang.length===0 && <div style={{ fontSize:13, color:C.sub }}>
+          Belum ada akun pendapatan atau beban yang diberi cabang pada periode ini.</div>}
+        <div className="grid-auto" style={{ display:"grid",
+          gridTemplateColumns:`repeat(${Math.min(cabang.length||1,3)},1fr)`, gap:16 }}>
+          {cabang.map(b=>{
+            const eff = b.rev ? b.kontrib/b.rev : 0;
             return (
-              <div key={b.n} style={{ border:`1px solid ${C.line}`, borderRadius:12, padding:"16px 18px" }}>
+              <div key={b.nama} style={{ border:`1px solid ${C.line}`, borderRadius:12, padding:"16px 18px" }}>
                 <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12 }}>
-                  <div style={{ width:9, height:9, borderRadius:99, background:b.c }} />
-                  <span style={{ fontWeight:700, fontSize:14.5 }}>Cabang {b.n}</span>
+                  <div style={{ width:9, height:9, borderRadius:99, background:b.warna }} />
+                  <span style={{ fontWeight:700, fontSize:14.5 }}>Cabang {b.nama}</span>
                 </div>
-                <RowLine l="Pendapatan" v={b.r} c={C.pos} />
-                <RowLine l="Biaya operasional" v={b.o} c={C.neg} />
+                <RowLine l="Pendapatan" v={b.rev} c={C.pos} />
+                <RowLine l="Biaya operasional" v={b.op} c={C.neg} />
                 <div style={{ borderTop:`1px solid ${C.line}`, marginTop:6, paddingTop:8 }}>
-                  <RowLine l="Kontribusi laba" v={b.k} bold />
+                  <RowLine l="Kontribusi laba" v={b.kontrib} bold />
                 </div>
-                <div style={{ marginTop:10, padding:"8px 12px", borderRadius:8, background:b.c+"10", fontSize:12 }}>
-                  Efisiensi: <b>{pct(eff)}</b> laba per rupiah pendapatan
-                  {totalKontrib>0 && <> · porsi <b>{pct(b.k/totalKontrib)}</b> dari total</>}
+                <div style={{ marginTop:10, padding:"8px 12px", borderRadius:8, background:b.warna+"10", fontSize:12 }}>
+                  {b.rev > 0 ? <>
+                    Efisiensi: <b>{pct(eff)}</b> laba per rupiah pendapatan
+                    {totalKontrib>0 && <> · porsi <b>{pct(b.kontrib/totalKontrib)}</b> dari total</>}
+                  </> : <span style={{ color:C.sub }}>Belum ada pendapatan periode ini</span>}
                 </div>
               </div>
             );
@@ -3312,6 +3404,15 @@ function COAView({ accounts, orgId, onChange }) {
 
   const rows = accounts.filter(a=>a.name.toLowerCase().includes(q.toLowerCase())||a.code.includes(q));
 
+  // pilihan cabang = cabang yang sudah dipakai di COA + cabang yang dikenal aplikasi
+  const pilihanCabang = (() => {
+    const set = new Set(CABANG_DIKENAL);
+    accounts.forEach(a=>{ if (a.branch) set.add(a.branch); });
+    const ada = [...set];
+    const dikenal = CABANG_DIKENAL.filter(c=>ada.includes(c));
+    return [...dikenal, ...ada.filter(c=>!CABANG_DIKENAL.includes(c)).sort()];
+  })();
+
   const startEdit = async (a) => {
     setEditId(a.id); setShowForm(true); setFlash("");
     setForm({ code:a.code, name:a.name, type:a.type, branch:a.branch||"",
@@ -3399,8 +3500,7 @@ function COAView({ accounts, orgId, onChange }) {
               <select value={form.branch} disabled={editUsed} onChange={e=>setForm({...form,branch:e.target.value})}
                 style={{ ...inp, background:editUsed?C.surf:"#fff" }}>
                 <option value="">— (umum)</option>
-                <option value="Progresif">Progresif</option>
-                <option value="Saraga">Saraga</option></select></div>
+                {pilihanCabang.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
             <div><label style={lbl}>Sumber (untuk beban)</label>
               <select value={form.pay_source||""} onChange={e=>setForm({...form,pay_source:e.target.value||null})} style={inp}>
                 <option value="">— (bukan beban)</option>
