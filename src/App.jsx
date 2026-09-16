@@ -263,7 +263,7 @@ export default function App() {
           {tab==="pnl"       && <PnL pnl={pnl} pnlPrev={pnlPrev} period={period} />}
           {tab==="balance"   && <Balance sheet={sheet} retained={retained} period={period} />}
           {tab==="equity"    && <Equity key={yearTick} orgId={orgId} period={period} />}
-          {tab==="cashflow"  && <CashFlow flow={flow} detail={flowDetail} />}
+          {tab==="cashflow"  && <CashFlow flow={flow} detail={flowDetail} accounts={accounts} />}
           {tab==="coa"       && <COAView accounts={accounts} orgId={orgId} onChange={reloadAccounts} />}
           {tab==="aset"      && <AsetTetap key={yearTick} orgId={orgId} acctByCode={acctByCode} accounts={accounts} />}
           {tab==="saldoawal" && <SaldoAwal key={yearTick} orgId={orgId} accounts={accounts} acctByCode={acctByCode} onChange={load} />}
@@ -1298,16 +1298,45 @@ function Journal({ accounts, acctById, acctByCode, journal, orgId, onChange }) {
 // ============================================================
 function Ledger({ balances }) {
   const [q, setQ] = useState("");
+  const [fCabang, setFCabang] = useState("");   // "" = semua cabang
   const groups = ["Kas & Bank","Akun Piutang","Aktiva Tetap","Ekuitas","Pendapatan","COGS","Beban Op","Beban Kas","Other Income","Other Expense"];
+
+  // cabang yang tersedia di data saldo (kalau RPC mengembalikan kolom branch)
+  const cabangAda = daftarCabang(balances);
+  const adaKolomCabang = cabangAda.length > 0;
+
   const shown = balances.filter(a=>(Number(a.debit)||Number(a.credit))&&
-    (a.name.toLowerCase().includes(q.toLowerCase())||a.code.includes(q)));
+    (a.name.toLowerCase().includes(q.toLowerCase())||a.code.includes(q)) &&
+    (!fCabang || a.branch===fCabang));
+
+  const totalTampil = shown.reduce((s,a)=>s+Number(a.balance||0),0);
+
   return (
     <div className="pop">
       <PageHead eyebrow="Turunan Otomatis" title="Buku Besar" sub={`Saldo tiap akun dari jurnal · ${YEAR}`} />
-      <div className="card" style={{ padding:"10px 14px", marginBottom:16, display:"flex", alignItems:"center", gap:8 }}>
-        <Search size={16} color={C.sub} />
-        <input placeholder="Cari akun atau kode…" value={q} onChange={e=>setQ(e.target.value)}
-          style={{ border:"none", outline:"none", fontSize:13.5, flex:1, background:"transparent" }} /></div>
+      <div className="card" style={{ padding:"10px 14px", marginBottom:16, display:"flex",
+        alignItems:"center", gap:10, flexWrap:"wrap" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, flex:1, minWidth:180 }}>
+          <Search size={16} color={C.sub} />
+          <input placeholder="Cari akun atau kode…" value={q} onChange={e=>setQ(e.target.value)}
+            style={{ border:"none", outline:"none", fontSize:13.5, flex:1, background:"transparent" }} />
+        </div>
+        {adaKolomCabang && (
+          <select value={fCabang} onChange={e=>setFCabang(e.target.value)}
+            style={{ ...inp, width:"auto", minWidth:160, fontWeight:600,
+              color: fCabang ? C.teal : C.sub }}>
+            <option value="">Semua cabang</option>
+            {cabangAda.map(c=><option key={c} value={c}>{c}</option>)}
+          </select>
+        )}
+      </div>
+      {fCabang && (
+        <div style={{ padding:"10px 14px", borderRadius:9, background:C.teal+"0D",
+          border:`1px solid ${C.teal}25`, fontSize:12.5, color:C.deep, marginBottom:14 }}>
+          Menampilkan akun cabang <b>{fCabang}</b> saja · {shown.length} akun ·
+          total saldo <span className="mono"><b>{money(totalTampil)}</b></span>
+        </div>
+      )}
       {groups.map(g=>{ const rows=shown.filter(a=>a.type===g); if(!rows.length) return null;
         return (
           <div key={g} className="card" style={{ marginBottom:14, overflow:"hidden" }}>
@@ -1315,7 +1344,10 @@ function Ledger({ balances }) {
             {rows.map(a=>(
               <div key={a.code} style={{ display:"grid", gridTemplateColumns:"1fr 130px 130px 140px",
                 padding:"11px 18px", borderTop:`1px solid ${C.line}`, fontSize:13, alignItems:"center" }}>
-                <span><b style={{ color:C.deep }}>{a.code}</b> <span style={{ color:C.sub }}>{a.name}</span></span>
+                <span><b style={{ color:C.deep }}>{a.code}</b> <span style={{ color:C.sub }}>{a.name}</span>
+                  {a.branch && <span style={{ fontSize:9.5, fontWeight:700, marginLeft:6, padding:"1px 7px",
+                    borderRadius:20, background:warnaCabang(a.branch, cabangAda)+"18",
+                    color:warnaCabang(a.branch, cabangAda) }}>{a.branch}</span>}</span>
                 <span className="mono" style={{ textAlign:"right", color:C.sub }}>{money(a.debit)}</span>
                 <span className="mono" style={{ textAlign:"right", color:C.sub }}>{money(a.credit)}</span>
                 <span className="mono" style={{ textAlign:"right", fontWeight:700 }}>{money(a.balance)}</span>
@@ -1324,6 +1356,12 @@ function Ledger({ balances }) {
           </div>
         );
       })}
+      {!adaKolomCabang && (
+        <div style={{ fontSize:11.5, color:C.sub, marginTop:4, lineHeight:1.5 }}>
+          Label cabang belum bisa ditampilkan karena fungsi <b>account_balances</b> di database belum
+          mengembalikan kolom <b>branch</b>. Saldo dan totalnya tetap benar — semua akun cabang sudah ikut terhitung.
+        </div>
+      )}
     </div>
   );
 }
@@ -1333,6 +1371,7 @@ function Ledger({ balances }) {
 // ============================================================
 function Trial({ balances }) {
   const rows = balances.filter(a=>Number(a.debit)||Number(a.credit));
+  const cabangAda = daftarCabang(balances);
   const dSum = rows.reduce((s,a)=>s+Number(a.debit),0);
   const cSum = rows.reduce((s,a)=>s+Number(a.credit),0);
   const bal = Math.round(dSum)===Math.round(cSum);
@@ -1346,7 +1385,10 @@ function Trial({ balances }) {
         {rows.map(a=>(
           <div key={a.code} style={{ display:"grid", gridTemplateColumns:"1fr 160px 160px",
             padding:"10px 20px", borderBottom:`1px solid ${C.line}`, fontSize:13 }}>
-            <span><b style={{ color:C.deep }}>{a.code}</b> <span style={{ color:C.sub }}>{a.name}</span></span>
+            <span><b style={{ color:C.deep }}>{a.code}</b> <span style={{ color:C.sub }}>{a.name}</span>
+              {a.branch && <span style={{ fontSize:9.5, fontWeight:700, marginLeft:6, padding:"1px 7px",
+                borderRadius:20, background:warnaCabang(a.branch, cabangAda)+"18",
+                color:warnaCabang(a.branch, cabangAda) }}>{a.branch}</span>}</span>
             <span className="mono" style={{ textAlign:"right" }}>{money(a.debit)}</span>
             <span className="mono" style={{ textAlign:"right" }}>{money(a.credit)}</span></div>
         ))}
@@ -1609,6 +1651,12 @@ function Balance({ sheet, retained, period }) {
         color:bal?C.pos:C.neg, fontWeight:700, fontSize:14 }}>
         {bal?"✓ SEIMBANG — Total Aktiva = Kewajiban + Modal":`✗ SELISIH ${money(Math.abs(totalAset-totalPasiva))} — cek jurnal`}
       </div>
+      <div style={{ fontSize:11.5, color:C.sub, marginTop:12, lineHeight:1.6 }}>
+        Neraca menyajikan posisi keuangan <b>satu entitas utuh</b>, mencakup seluruh cabang. Aset
+        seperti rekening bank, kas, dan peralatan dimiliki bersama sehingga tidak dipecah per cabang.
+        Kontribusi masing-masing cabang terhadap laba bisa dilihat di <b>Laba Rugi</b>,
+        <b> Analisis Keuangan</b>, dan <b>Laporan Owner</b>.
+      </div>
     </div>
   );
 }
@@ -1640,8 +1688,10 @@ function Equity({ orgId, period }) {
         <R l="+ Laba Bersih periode" v={laba} tone={C.pos} />
         <R l="Modal Akhir" v={modalAkhir} strong />
       </div>
-      <div style={{ fontSize:12, color:C.sub, marginTop:12, lineHeight:1.5 }}>
+      <div style={{ fontSize:12, color:C.sub, marginTop:12, lineHeight:1.6 }}>
         Wakaf & dividen dapat ditambahkan sebagai pengurang setelah laba bersih (jurnal tersendiri di ekuitas).
+        Modal dicatat di tingkat <b>entitas</b> — mencakup seluruh cabang, termasuk cabang yang baru dibuka,
+        karena modal owner tidak dipisah per lokasi.
       </div>
     </div>
   );
@@ -2330,7 +2380,8 @@ const RowLine = ({ l, v, c, bold }) => (
 // ============================================================
 // CASH FLOW
 // ============================================================
-function CashFlow({ flow, detail }) {
+function CashFlow({ flow, detail, accounts }) {
+  const cabangEntitas = daftarCabang(accounts);
   const bankSum = flow.filter(f=>f.code==="1-10002"||f.code==="1-10001");
   const kasSum = flow.filter(f=>f.code==="1-10007");
   const bankDetail = detail.filter(d=>d.code==="1-10002"||d.code==="1-10001");
@@ -2391,6 +2442,13 @@ function CashFlow({ flow, detail }) {
     <div className="pop">
       <PageHead eyebrow="Turunan Otomatis" title="Laporan Arus Kas"
         sub={`Klik judul untuk buka/tutup rincian tiap mutasi Bank & Kas · ${YEAR}`} />
+      <div style={{ padding:"11px 15px", borderRadius:10, marginBottom:16, fontSize:12.5, lineHeight:1.55,
+        background:C.teal+"0D", border:`1px solid ${C.teal}25`, color:C.deep }}>
+        Arus kas dilaporkan di tingkat <b>entitas</b>, bukan per cabang — seluruh cabang
+        {cabangEntitas.length>0 && <> ({cabangEntitas.join(", ")})</>} memakai rekening Bank dan
+        Kas yang sama, jadi mutasinya menyatu di sini. Untuk melihat kontribusi tiap cabang, buka
+        <b> Laba Rugi</b>, <b>Analisis Keuangan</b>, atau <b>Laporan Owner</b>.
+      </div>
       <Block title="BANK" sumRows={bankSum} rows={bankDetail} tone={C.teal} />
       <Block title="KAS (PETTY CASH)" sumRows={kasSum} rows={kasDetail} tone={C.kas} />
     </div>
@@ -2408,6 +2466,7 @@ function TargetView({ orgId }) {
   const [flash, setFlash] = useState("");
   const [edit, setEdit] = useState(false);
   const [monthly, setMonthly] = useState([]);
+  const [pnlTahun, setPnlTahun] = useState([]);   // untuk rincian per cabang
 
   const reload = async () => {
     const t = await getTarget(orgId, YEAR);
@@ -2419,6 +2478,10 @@ function TargetView({ orgId }) {
     });
     setAch(await getAchievement(orgId, YEAR));
     try { setMonthly(await getMonthlyAchievement(orgId, YEAR)); } catch(e){ /* RPC belum ada */ }
+    try {
+      const [s,e] = periodRange(YEAR, "all");
+      setPnlTahun(await rpcPnl(orgId, s, e));
+    } catch(e){ setPnlTahun([]); }
   };
   useEffect(()=>{ if(orgId) reload(); /* eslint-disable-next-line */ }, [orgId]);
 
@@ -2563,6 +2626,60 @@ function TargetView({ orgId }) {
           </> : `Belum ada transaksi tahun ${YEAR} untuk dianalisis. Input transaksi dulu.`}
         </div>
       </div>
+
+      {/* Kontribusi tiap cabang terhadap target */}
+      {(()=>{
+        const cabang = perCabang(pnlTahun);
+        if (cabang.length===0) return null;
+        const totalRevCabang = cabang.reduce((s,b)=>s+b.rev,0);
+        // target dibagi rata sebagai acuan awal; cabang baru wajar belum mencapainya
+        const acuan = tP ? tP/cabang.length : 0;
+        return (
+          <div className="card" style={{ padding:"18px 20px", marginTop:16 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
+              <TargetIcon size={18} color={C.teal} />
+              <span style={{ fontWeight:700, fontSize:15 }}>Kontribusi Cabang terhadap Target</span>
+            </div>
+            <div style={{ fontSize:12, color:C.sub, marginBottom:14 }}>
+              Target {YEAR} ditetapkan untuk seluruh entitas. Tabel ini memperlihatkan berapa besar
+              tiap cabang menyumbang omzet, dengan acuan pembagian rata {money(acuan)} per cabang.
+            </div>
+            <div className="scroll-x" style={{ border:`1px solid ${C.line}`, borderRadius:12, overflow:"hidden" }}>
+              <div style={{ display:"grid", gridTemplateColumns:"1.2fr 1fr 90px 1fr 100px",
+                padding:"9px 14px", background:C.deep, color:"#DDECEC", fontSize:10.5, fontWeight:600 }}>
+                <span>CABANG</span>
+                <span style={{ textAlign:"right" }}>OMZET {YEAR}</span>
+                <span style={{ textAlign:"center" }}>PORSI</span>
+                <span style={{ textAlign:"right" }}>ACUAN RATA</span>
+                <span style={{ textAlign:"center" }}>CAPAIAN</span>
+              </div>
+              {cabang.map(b=>{
+                const porsi = totalRevCabang>0 ? b.rev/totalRevCabang : 0;
+                const capai = acuan>0 ? b.rev/acuan : 0;
+                return (
+                  <div key={b.nama} style={{ display:"grid", gridTemplateColumns:"1.2fr 1fr 90px 1fr 100px",
+                    padding:"9px 14px", borderBottom:`1px solid ${C.line}`, fontSize:12, alignItems:"center" }}>
+                    <span style={{ display:"flex", alignItems:"center", gap:7, fontWeight:600, color:C.deep }}>
+                      <span style={{ width:8, height:8, borderRadius:99, background:b.warna }} />{b.nama}</span>
+                    <span className="mono" style={{ textAlign:"right", fontWeight:600 }}>{money(b.rev)}</span>
+                    <span className="mono" style={{ textAlign:"center", color:C.sub }}>{pct(porsi)}</span>
+                    <span className="mono" style={{ textAlign:"right", color:C.sub }}>
+                      {acuan>0?money(acuan):"–"}</span>
+                    <span className="mono" style={{ textAlign:"center", fontWeight:700,
+                      color: acuan===0 ? C.sub : capai>=1?C.pos : capai>=0.8?C.brass : C.neg }}>
+                      {acuan>0?pct(capai):"–"}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ fontSize:11, color:C.sub, marginTop:10, lineHeight:1.5 }}>
+              Acuan rata hanya alat bantu baca, bukan target resmi per cabang — cabang lama dan cabang
+              yang baru buka wajar punya kapasitas berbeda. Untuk target resmi per cabang, struktur
+              tabel target di database perlu ditambah kolom cabang.
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ===== Detail ketercapaian per bulan ===== */}
       {monthly.length>0 && (()=>{
@@ -2737,6 +2854,8 @@ function OwnerReport({ orgId, orgName }) {
   const bankBal=bal.filter(b=>b.code==="1-10002").reduce((s,b)=>s+Number(b.balance),0);
   const kasBal=bal.filter(b=>b.code==="1-10007").reduce((s,b)=>s+Number(b.balance),0);
   const tP=target?Number(target.target_pendapatan):0;
+  const cabang = perCabang(pnl);
+  const totalRevCabang = cabang.reduce((s,b)=>s+b.rev,0);
 
   const trendData = (trend||[]).map(t=>({ m:MONTHS[Number(t.bulan)-1]?.slice(0,3)||t.bulan,
     rev:Number(t.pendapatan), profit:Number(t.laba) }));
@@ -2796,6 +2915,81 @@ function OwnerReport({ orgId, orgName }) {
         </ResponsiveContainer>
       </div>
 
+      {/* Performa per cabang */}
+      {cabang.length>0 && (
+        <div className="card" style={{ padding:"18px 20px", marginBottom:16 }}>
+          <div style={{ fontWeight:700, fontSize:15, marginBottom:4 }}>Performa per Cabang {YEAR}</div>
+          <div style={{ fontSize:12, color:C.sub, marginBottom:14 }}>
+            Kontribusi laba = pendapatan cabang − biaya operasional cabang (belum dipotong beban umum)
+          </div>
+
+          {/* ringkasan kartu per cabang */}
+          <div className="grid-auto" style={{ display:"grid",
+            gridTemplateColumns:`repeat(${Math.min(cabang.length,3)},1fr)`, gap:12, marginBottom:16 }}>
+            {cabang.map(b=>{
+              const eff = b.rev ? b.kontrib/b.rev : 0;
+              return (
+                <div key={b.nama} style={{ border:`1px solid ${C.line}`, borderRadius:12,
+                  borderLeft:`4px solid ${b.warna}`, padding:"13px 15px" }}>
+                  <div style={{ fontWeight:700, fontSize:13.5, marginBottom:8 }}>{b.nama}</div>
+                  <ORowMini l="Pendapatan" v={b.rev} c={C.pos} />
+                  <ORowMini l="Operasional" v={b.op} c={C.neg} />
+                  <div style={{ borderTop:`1px solid ${C.line}`, marginTop:6, paddingTop:6 }}>
+                    <ORowMini l="Kontribusi laba" v={b.kontrib} c={b.kontrib>=0?C.pos:C.neg} bold />
+                  </div>
+                  <div style={{ marginTop:8, fontSize:11, color:C.sub }}>
+                    {b.rev>0
+                      ? <>Efisiensi <b>{pct(eff)}</b>{totalRevCabang>0 && <> · porsi omzet <b>{pct(b.rev/totalRevCabang)}</b></>}</>
+                      : "Belum ada pendapatan tahun ini"}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* tabel ringkas untuk cetak */}
+          <div className="scroll-x" style={{ border:`1px solid ${C.line}`, borderRadius:12, overflow:"hidden" }}>
+            <div style={{ display:"grid", gridTemplateColumns:"1.2fr 1fr 1fr 1fr 90px",
+              padding:"9px 14px", background:C.deep, color:"#DDECEC", fontSize:10.5, fontWeight:600 }}>
+              <span>CABANG</span>
+              <span style={{ textAlign:"right" }}>PENDAPATAN</span>
+              <span style={{ textAlign:"right" }}>OPERASIONAL</span>
+              <span style={{ textAlign:"right" }}>KONTRIBUSI LABA</span>
+              <span style={{ textAlign:"center" }}>PORSI</span>
+            </div>
+            {cabang.map(b=>(
+              <div key={b.nama} style={{ display:"grid", gridTemplateColumns:"1.2fr 1fr 1fr 1fr 90px",
+                padding:"9px 14px", borderBottom:`1px solid ${C.line}`, fontSize:12, alignItems:"center" }}>
+                <span style={{ display:"flex", alignItems:"center", gap:7, fontWeight:600, color:C.deep }}>
+                  <span style={{ width:8, height:8, borderRadius:99, background:b.warna }} />{b.nama}</span>
+                <span className="mono" style={{ textAlign:"right" }}>{money(b.rev)}</span>
+                <span className="mono" style={{ textAlign:"right", color:C.neg }}>{money(b.op)}</span>
+                <span className="mono" style={{ textAlign:"right", fontWeight:700,
+                  color:b.kontrib>=0?C.pos:C.neg }}>{money(b.kontrib)}</span>
+                <span className="mono" style={{ textAlign:"center", color:C.sub }}>
+                  {totalRevCabang>0 ? pct(b.rev/totalRevCabang) : "–"}</span>
+              </div>
+            ))}
+            <div style={{ display:"grid", gridTemplateColumns:"1.2fr 1fr 1fr 1fr 90px",
+              padding:"11px 14px", background:C.surf, fontSize:12, fontWeight:700 }}>
+              <span>TOTAL CABANG</span>
+              <span className="mono" style={{ textAlign:"right" }}>{money(totalRevCabang)}</span>
+              <span className="mono" style={{ textAlign:"right", color:C.neg }}>
+                {money(cabang.reduce((s,b)=>s+b.op,0))}</span>
+              <span className="mono" style={{ textAlign:"right", color:C.pos }}>
+                {money(cabang.reduce((s,b)=>s+b.kontrib,0))}</span>
+              <span style={{ textAlign:"center" }}>100%</span>
+            </div>
+          </div>
+          {rev > totalRevCabang && (
+            <div style={{ fontSize:11, color:C.sub, marginTop:10, lineHeight:1.5 }}>
+              Ada {money(rev-totalRevCabang)} pendapatan yang belum diberi cabang (akun umum), sehingga
+              total cabang di atas lebih kecil dari total pendapatan {money(rev)}.
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Target vs pencapaian */}
       {target && (
         <div className="card" style={{ padding:"18px 20px", marginBottom:16 }}>
@@ -2847,6 +3041,12 @@ const ORow = ({ l, v, c }) => (
     borderBottom:`1px solid ${C.line}`, fontSize:13 }}>
     <span style={{ color:C.sub }}>{l}</span>
     <span className="mono" style={{ textAlign:"right", fontWeight:600, color:c||C.ink }}>{money(v)}</span>
+  </div>
+);
+const ORowMini = ({ l, v, c, bold }) => (
+  <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, padding:"3px 0" }}>
+    <span style={{ color:bold?C.ink:C.sub, fontWeight:bold?600:400 }}>{l}</span>
+    <span className="mono" style={{ fontWeight:bold?700:600, color:c||C.ink }}>{money(v)}</span>
   </div>
 );
 
