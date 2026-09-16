@@ -248,19 +248,19 @@ export default function App() {
 
           <div id="print-area">
           {tab==="dashboard" && <Dashboard pnl={pnl} balances={balances} trend={trend}
-                                          pnlPrev={pnlPrev} trendPrev={trendPrev} />}
+                                          pnlPrev={pnlPrev} trendPrev={trendPrev} accounts={accounts} />}
           {tab==="transaksi" && <Transaksi key={yearTick} accounts={accounts} acctByCode={acctByCode}
                                           journal={journal} acctById={acctById} orgId={orgId} onChange={load} />}
           {tab==="journal"   && <Journal key={yearTick} accounts={accounts} acctById={acctById} acctByCode={acctByCode}
                                           journal={journal} orgId={orgId} onChange={load} />}
           {tab==="analisis"  && <Analisis pnl={pnl} balances={balances} trend={trend} period={period}
-                                          pnlPrev={pnlPrev} trendPrev={trendPrev} />}
-          {tab==="siswa"     && <PertumbuhanSiswa key={yearTick} orgId={orgId} />}
-          {tab==="owner"     && <OwnerReport key={yearTick} orgId={orgId} orgName={orgName} />}
-          {tab==="target"    && <TargetView key={yearTick} orgId={orgId} />}
+                                          pnlPrev={pnlPrev} trendPrev={trendPrev} accounts={accounts} />}
+          {tab==="siswa"     && <PertumbuhanSiswa key={yearTick} orgId={orgId} accounts={accounts} />}
+          {tab==="owner"     && <OwnerReport key={yearTick} orgId={orgId} orgName={orgName} accounts={accounts} />}
+          {tab==="target"    && <TargetView key={yearTick} orgId={orgId} accounts={accounts} />}
           {tab==="ledger"    && <Ledger balances={balances} />}
           {tab==="trial"     && <Trial balances={balances} />}
-          {tab==="pnl"       && <PnL pnl={pnl} pnlPrev={pnlPrev} period={period} />}
+          {tab==="pnl"       && <PnL pnl={pnl} pnlPrev={pnlPrev} period={period} accounts={accounts} />}
           {tab==="balance"   && <Balance sheet={sheet} retained={retained} period={period} />}
           {tab==="equity"    && <Equity key={yearTick} orgId={orgId} period={period} />}
           {tab==="cashflow"  && <CashFlow flow={flow} detail={flowDetail} accounts={accounts} />}
@@ -327,7 +327,7 @@ const sumBy = (rows, pred) => rows.filter(pred).reduce((s,r)=>s+Number(r.amount|
    CABANG — dikelola dinamis supaya cabang baru otomatis terhitung
    di seluruh laporan tanpa mengubah kode lagi.
    ============================================================ */
-const CABANG_DIKENAL = ["Progresif", "Saraga", "The Trans"];
+const CABANG_DIKENAL = ["Progresif", "Saraga", "The Trans Luxury", "The Trans"];
 const PALET_CABANG = [C.teal, C.brass, C.kas, C.pos, C.neg, C.deep];
 
 // warna konsisten per cabang (berdasarkan urutan daftar)
@@ -347,9 +347,11 @@ function daftarCabang(...sumber) {
   return [...dikenal, ...lainnya];
 }
 
-// ringkasan pendapatan / beban operasional / kontribusi laba per cabang
-function perCabang(pnlRows) {
-  const nama = daftarCabang(pnlRows);
+// ringkasan pendapatan / beban operasional / kontribusi laba per cabang.
+// `accounts` (Chart of Account) dipakai agar cabang yang belum punya transaksi
+// tetap muncul di laporan dengan nilai nol.
+function perCabang(pnlRows, accounts) {
+  const nama = daftarCabang(pnlRows, accounts);
   const S = (type, branch) => (pnlRows||[])
     .filter(r=>r.type===type && r.branch===branch)
     .reduce((s,r)=>s+Number(r.amount),0);
@@ -549,9 +551,9 @@ function PerbandinganTahun({ pnl, pnlPrev, trend, trendPrev, period, ringkas }) 
 // ============================================================
 // DASHBOARD
 // ============================================================
-function Dashboard({ pnl, balances, trend, pnlPrev, trendPrev }) {
+function Dashboard({ pnl, balances, trend, pnlPrev, trendPrev, accounts }) {
   const rev = sumBy(pnl, r=>r.type==="Pendapatan");
-  const cabang = perCabang(pnl);
+  const cabang = perCabang(pnl, accounts);
   const totalRevCabang = cabang.reduce((s,b)=>s+b.rev,0);
   const opBank = sumBy(pnl, r=>r.type==="Beban Op");
   const kasBeban = sumBy(pnl, r=>r.type==="Beban Kas");
@@ -1405,14 +1407,14 @@ function Trial({ balances }) {
 // ============================================================
 // P&L — toggle Lengkap / Bank saja
 // ============================================================
-function PnL({ pnl, pnlPrev, period }) {
+function PnL({ pnl, pnlPrev, period, accounts }) {
   const [view, setView] = useState("full");
   const bankOnly = view==="bank";
   const g = (type,branch) => pnl.filter(r=>r.type===type&&(!branch||r.branch===branch));
   const S = (type,branch) => g(type,branch).reduce((s,r)=>s+Number(r.amount),0);
 
   const rev=S("Pendapatan");
-  const cabang = perCabang(pnl);
+  const cabang = perCabang(pnl, accounts);
   const cogs=S("COGS"), opBank=S("Beban Op");
   const kasBeban=S("Beban Kas"), oi=S("Other Income"), oe=S("Other Expense");
   const grossProfit=rev-cogs, afterOp=grossProfit-opBank-kasBeban, profitFull=afterOp+oi-oe;
@@ -1700,7 +1702,7 @@ function Equity({ orgId, period }) {
 // ============================================================
 // PERTUMBUHAN SISWA — analisis pendaftaran (dari akun pendaftaran)
 // ============================================================
-function PertumbuhanSiswa({ orgId }) {
+function PertumbuhanSiswa({ orgId, accounts }) {
   const [rows, setRows] = useState([]);
   const [rowsPrev, setRowsPrev] = useState([]);   // data tahun sebelumnya
   const [biaya, setBiaya] = useState("");    // biaya pendaftaran per siswa
@@ -1715,10 +1717,12 @@ function PertumbuhanSiswa({ orgId }) {
 
   const biayaNum = +biaya || 0;
 
-  // daftar cabang yang muncul di data pendaftaran (dua tahun sekaligus)
+  // daftar cabang: dari data pendaftaran dua tahun + dari Chart of Account,
+  // supaya cabang baru tetap muncul walau belum ada pendaftaran
   const namaCabang = (() => {
     const set = new Set();
     [...(rows||[]), ...(rowsPrev||[])].forEach(r=>{ if (r.cabang) set.add(r.cabang); });
+    (accounts||[]).forEach(a=>{ if (a.branch) set.add(a.branch); });
     const ada = [...set];
     const dikenal = CABANG_DIKENAL.filter(c=>ada.includes(c));
     return [...dikenal, ...ada.filter(c=>!CABANG_DIKENAL.includes(c)).sort()];
@@ -2017,11 +2021,11 @@ function PertumbuhanSiswa({ orgId }) {
 // ============================================================
 // ANALISIS KEUANGAN — rasio, tren, per cabang, insight otomatis
 // ============================================================
-function Analisis({ pnl, balances, trend, period, pnlPrev, trendPrev }) {
+function Analisis({ pnl, balances, trend, period, pnlPrev, trendPrev, accounts }) {
   const S = (type,branch) => pnl.filter(r=>r.type===type&&(!branch||r.branch===branch))
     .reduce((s,r)=>s+Number(r.amount),0);
   const rev=S("Pendapatan");
-  const cabang = perCabang(pnl);
+  const cabang = perCabang(pnl, accounts);
   const opCabang = cabang.reduce((s,b)=>s+b.op,0);   // total gaji pelatih/operasional semua cabang
   const totalKontrib = cabang.reduce((s,b)=>s+b.kontrib,0);
   const cogs=S("COGS"), opBank=S("Beban Op");
@@ -2458,7 +2462,7 @@ function CashFlow({ flow, detail, accounts }) {
 // ============================================================
 // TARGET — set tahunan, auto-bagi bulanan/mingguan, analisis pencapaian
 // ============================================================
-function TargetView({ orgId }) {
+function TargetView({ orgId, accounts }) {
   const [target, setTarget] = useState(null);
   const [ach, setAch] = useState({ pendapatan:0, laba:0, transaksi:0 });
   const [form, setForm] = useState({ pendapatan:"", laba:"", transaksi:"" });
@@ -2629,7 +2633,7 @@ function TargetView({ orgId }) {
 
       {/* Kontribusi tiap cabang terhadap target */}
       {(()=>{
-        const cabang = perCabang(pnlTahun);
+        const cabang = perCabang(pnlTahun, accounts);
         if (cabang.length===0) return null;
         const totalRevCabang = cabang.reduce((s,b)=>s+b.rev,0);
         // target dibagi rata sebagai acuan awal; cabang baru wajar belum mencapainya
@@ -2819,7 +2823,7 @@ const Cell2 = ({ l, v, bold }) => (
 // ============================================================
 // LAPORAN OWNER — ringkasan eksekutif + detail lengkap, siap PDF
 // ============================================================
-function OwnerReport({ orgId, orgName }) {
+function OwnerReport({ orgId, orgName, accounts }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
   useEffect(()=>{ (async()=>{
@@ -2854,7 +2858,7 @@ function OwnerReport({ orgId, orgName }) {
   const bankBal=bal.filter(b=>b.code==="1-10002").reduce((s,b)=>s+Number(b.balance),0);
   const kasBal=bal.filter(b=>b.code==="1-10007").reduce((s,b)=>s+Number(b.balance),0);
   const tP=target?Number(target.target_pendapatan):0;
-  const cabang = perCabang(pnl);
+  const cabang = perCabang(pnl, accounts);
   const totalRevCabang = cabang.reduce((s,b)=>s+b.rev,0);
 
   const trendData = (trend||[]).map(t=>({ m:MONTHS[Number(t.bulan)-1]?.slice(0,3)||t.bulan,
