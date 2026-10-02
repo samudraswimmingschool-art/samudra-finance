@@ -1492,7 +1492,11 @@ function PnL({ pnl, pnlPrev, period, accounts }) {
         {pnl.filter(r=>r.type==="Beban Op" && !r.branch).length>0 && <>
           <Section t="BIAYA OPERASIONAL UMUM (tanpa cabang)" />
           {pnl.filter(r=>r.type==="Beban Op" && !r.branch).map(r=><Row key={r.code} r={r} ind/>)}
+          <Sub l="Total Operasional Umum"
+            v={pnl.filter(r=>r.type==="Beban Op" && !r.branch)
+                  .reduce((s,r)=>s+Number(r.amount),0)} tone={C.neg} />
         </>}
+        <Sub l="TOTAL BIAYA OPERASIONAL (semua cabang + umum)" v={opBank} strong />
 
         {!bankOnly && <>
           <Section t="BEBAN UMUM & ADMIN (dari Kas)" tone={C.kas} />
