@@ -1,12 +1,533 @@
-/* ============================================================
-   TAMBAHAN UNTUK src/lib/api.js
+import { supabase } from "./supabase";
 
-   Salin SELURUH isi file ini, lalu tempelkan di BAGIAN PALING BAWAH
-   file api.js kamu (setelah bagian "---- Auth ----").
-   Tidak ada baris lama yang perlu diubah atau dihapus.
+/* ============================================================
+   Layer data: semua interaksi ke Supabase terpusat di sini.
+   Komponen UI tidak menyentuh supabase langsung — panggil
+   fungsi-fungsi ini saja. Memudahkan perawatan & testing.
    ============================================================ */
 
-// ---- Pengembangan Usaha: daftar inisiatif ----
+// ---- helper periode → rentang tanggal ----
+export function periodRange(year, period) {
+  // period: 'all' atau 0..11 (Jan..Des)
+  if (period === "all") return [`${year}-01-01`, `${year}-12-31`];
+  const m = String(period + 1).padStart(2, "0");
+  const last = new Date(year, period + 1, 0).getDate();
+  return [`${year}-${m}-01`, `${year}-${m}-${last}`];
+}
+
+// ---- profil & org user yang login ----
+export async function getMyProfile() {
+  const { data: u } = await supabase.auth.getUser();
+  if (!u?.user) return null;
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("id, full_name, role, org_id, org(name)")
+    .eq("id", u.user.id)
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+// ---- Chart of Account ----
+export async function getAccounts(orgId) {
+  const { data, error } = await supabase
+    .from("accounts")
+    .select("*")
+    .eq("org_id", orgId)
+    .order("code");
+  if (error) throw error;
+  return data;
+}
+
+// Tambah akun baru
+export async function addAccount(orgId, acc) {
+  const { data, error } = await supabase
+    .from("accounts")
+    .insert({
+      org_id: orgId,
+      code: acc.code,
+      name: acc.name,
+      type: acc.type,
+      branch: acc.branch || null,
+      normal_side: acc.normal_side,
+      statement: acc.statement,
+      pay_source: acc.pay_source || null,
+      is_active: true,
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+// Cek apakah akun sudah dipakai di jurnal (untuk keamanan hapus)
+export async function accountUsedCount(accountId) {
+  const { count, error } = await supabase
+    .from("journal_lines")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId);
+  if (error) throw error;
+  return count || 0;
+}
+
+// Hapus akun (hanya jika belum dipakai)
+export async function deleteAccount(accountId) {
+  const used = await accountUsedCount(accountId);
+  if (used > 0) {
+    throw new Error(`Akun tidak bisa dihapus karena sudah dipakai di ${used} transaksi. Nonaktifkan saja.`);
+  }
+  const { error } = await supabase.from("accounts").delete().eq("id", accountId);
+  if (error) throw error;
+}
+
+// Aktif / nonaktif akun
+export async function setAccountActive(accountId, active) {
+  const { error } = await supabase
+    .from("accounts")
+    .update({ is_active: active })
+    .eq("id", accountId);
+  if (error) throw error;
+}
+
+// Edit akun. Jika sudah dipakai, hanya nama & pay_source yang boleh diubah.
+export async function updateAccount(accountId, patch) {
+  const used = await accountUsedCount(accountId);
+  const safe = used > 0
+    ? { name: patch.name, pay_source: patch.pay_source ?? null }
+    : {
+        code: patch.code, name: patch.name, type: patch.type,
+        branch: patch.branch || null, normal_side: patch.normal_side,
+        statement: patch.statement, pay_source: patch.pay_source || null,
+      };
+  const { error } = await supabase.from("accounts").update(safe).eq("id", accountId);
+  if (error) throw error;
+  return used > 0;
+}
+
+// ---- Jurnal: ambil daftar (header + baris) ----
+export async function getJournal(orgId, start, end) {
+  const { data, error } = await supabase
+    .from("journal_entries")
+    .select("id, entry_date, memo, cash_source, kind, journal_lines(account_id, debit, credit)")
+    .eq("org_id", orgId)
+    .gte("entry_date", start)
+    .lte("entry_date", end)
+    .order("entry_date", { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+// ---- Jurnal: posting (atomik; trigger DB jaga debet=kredit) ----
+export async function postJournal(orgId, entry) {
+  // entry: { date, memo, cash:'bank'|'kas', kind, lines:[{account_id,debit,credit}] }
+  const { data: header, error: e1 } = await supabase
+    .from("journal_entries")
+    .insert({
+      org_id: orgId,
+      entry_date: entry.date,
+      memo: entry.memo,
+      cash_source: entry.cash,
+      kind: entry.kind || "general",
+    })
+    .select()
+    .single();
+  if (e1) throw e1;
+
+  const rows = entry.lines
+    .filter((l) => (l.debit || 0) > 0 || (l.credit || 0) > 0)
+    .map((l) => ({
+      entry_id: header.id,
+      account_id: l.account_id,
+      debit: l.debit || 0,
+      credit: l.credit || 0,
+    }));
+
+  const { error: e2 } = await supabase.from("journal_lines").insert(rows);
+  if (e2) {
+    // rollback header agar tidak tertinggal jurnal kosong
+    await supabase.from("journal_entries").delete().eq("id", header.id);
+    throw e2; // pesan trigger "Jurnal timpang" muncul di sini
+  }
+  return header;
+}
+
+export async function deleteJournal(entryId) {
+  const { error } = await supabase.from("journal_entries").delete().eq("id", entryId);
+  if (error) throw error;
+}
+
+// ---- Update jurnal (edit): hapus baris lama, ganti header + baris baru ----
+export async function updateJournal(entryId, orgId, entry) {
+  const { error: eh } = await supabase
+    .from("journal_entries")
+    .update({
+      entry_date: entry.date,
+      memo: entry.memo,
+      cash_source: entry.cash,
+    })
+    .eq("id", entryId);
+  if (eh) throw eh;
+
+  // ganti seluruh baris
+  const { error: ed } = await supabase.from("journal_lines").delete().eq("entry_id", entryId);
+  if (ed) throw ed;
+
+  const rows = entry.lines
+    .filter((l) => (l.debit || 0) > 0 || (l.credit || 0) > 0)
+    .map((l) => ({
+      entry_id: entryId,
+      account_id: l.account_id,
+      debit: l.debit || 0,
+      credit: l.credit || 0,
+    }));
+  const { error: ei } = await supabase.from("journal_lines").insert(rows);
+  if (ei) throw ei; // trigger tetap menolak jika debet≠kredit
+  return true;
+}
+
+// ---- Jurnal dengan rentang tanggal spesifik (filter tanggal) ----
+export async function getJournalRange(orgId, start, end) {
+  const { data, error } = await supabase
+    .from("journal_entries")
+    .select("id, entry_date, memo, cash_source, kind, journal_lines(account_id, debit, credit)")
+    .eq("org_id", orgId)
+    .gte("entry_date", start)
+    .lte("entry_date", end)
+    .order("entry_date", { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+// ---- Tren bulanan (Analisis) ----
+export async function rpcMonthlyTrend(orgId, year) {
+  const { data, error } = await supabase.rpc("monthly_trend", { p_org: orgId, p_year: year });
+  if (error) throw error;
+  return data;
+}
+
+// ---- Arus Kas detail (per transaksi) ----
+export async function rpcCashFlowDetail(orgId, start, end) {
+  const { data, error } = await supabase.rpc("cash_flow_detail", {
+    p_org: orgId, p_start: start, p_end: end,
+  });
+  if (error) throw error;
+  return data;
+}
+
+// ---- Laporan via RPC ----
+export async function rpcAccountBalances(orgId, start, end) {
+  const { data, error } = await supabase.rpc("account_balances", {
+    p_org: orgId, p_start: start, p_end: end,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function rpcPnl(orgId, start, end) {
+  const { data, error } = await supabase.rpc("pnl", {
+    p_org: orgId, p_start: start, p_end: end,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function rpcBalanceSheet(orgId, asOf) {
+  const { data, error } = await supabase.rpc("balance_sheet", {
+    p_org: orgId, p_as_of: asOf,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function rpcRetainedProfit(orgId, asOf) {
+  const { data, error } = await supabase.rpc("retained_profit", {
+    p_org: orgId, p_as_of: asOf,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function rpcCashFlow(orgId, start, end) {
+  const { data, error } = await supabase.rpc("cash_flow", {
+    p_org: orgId, p_start: start, p_end: end,
+  });
+  if (error) throw error;
+  return data;
+}
+
+// ---- Target & pencapaian ----
+export async function getTarget(orgId, year) {
+  const { data, error } = await supabase.rpc("get_target", { p_org: orgId, p_year: year });
+  if (error) throw error;
+  return data?.[0] || null;
+}
+export async function saveTarget(orgId, year, t) {
+  const { error } = await supabase.rpc("save_target", {
+    p_org: orgId, p_year: year,
+    p_pendapatan: t.pendapatan || 0, p_laba: t.laba || 0, p_transaksi: t.transaksi || 0,
+  });
+  if (error) throw error;
+}
+export async function getAchievement(orgId, year) {
+  const { data, error } = await supabase.rpc("achievement", { p_org: orgId, p_year: year });
+  if (error) throw error;
+  return data?.[0] || { pendapatan: 0, laba: 0, transaksi: 0 };
+}
+
+// Pencapaian per bulan (untuk detail ketercapaian target tiap bulan)
+export async function getMonthlyAchievement(orgId, year) {
+  const { data, error } = await supabase.rpc("monthly_achievement", { p_org: orgId, p_year: year });
+  if (error) throw error;
+  return data || [];
+}
+
+// Analisis pertumbuhan pendaftaran siswa (dari akun pendaftaran)
+export async function getRegistrationGrowth(orgId, year) {
+  const { data, error } = await supabase.rpc("registration_growth", { p_org: orgId, p_year: year });
+  if (error) throw error;
+  return data || [];
+}
+
+// ---- Aset Tetap & Penyusutan ----
+export async function getFixedAssets(orgId) {
+  const { data, error } = await supabase
+    .from("fixed_assets")
+    .select("*")
+    .eq("org_id", orgId)
+    .order("acquire_date");
+  if (error) throw error;
+  return data;
+}
+
+export async function addFixedAsset(orgId, a) {
+  const { data, error } = await supabase.from("fixed_assets").insert({
+    org_id: orgId,
+    name: a.name,
+    category: a.category || null,
+    acquire_date: a.acquire_date,
+    cost: a.cost || 0,
+    residual: a.residual || 0,
+    useful_life_years: a.useful_life_years || 1,
+    account_asset: a.account_asset || null,
+    is_active: true,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateFixedAsset(assetId, a) {
+  const { error } = await supabase.from("fixed_assets").update({
+    name: a.name,
+    category: a.category || null,
+    acquire_date: a.acquire_date,
+    cost: a.cost || 0,
+    residual: a.residual || 0,
+    useful_life_years: a.useful_life_years || 1,
+  }).eq("id", assetId);
+  if (error) throw error;
+}
+
+export async function deleteFixedAsset(assetId) {
+  const { error } = await supabase.from("fixed_assets").delete().eq("id", assetId);
+  if (error) throw error;
+}
+
+export async function rpcAssetDepreciation(orgId, asOf) {
+  const { data, error } = await supabase.rpc("asset_depreciation", { p_org: orgId, p_as_of: asOf });
+  if (error) throw error;
+  return data;
+}
+
+// Posting penyusutan sebulan untuk satu aset:
+// buat jurnal (Debet Beban Penyusutan, Kredit Akumulasi Penyusutan)
+// lalu catat di depreciation_postings agar tidak dobel.
+export async function postDepreciation(orgId, asset, year, month, amount, acctByCode) {
+  const bebanId = acctByCode["6-60900"]?.id;
+  const akumId = acctByCode["1-10800"]?.id;
+  if (!bebanId || !akumId) throw new Error("Akun penyusutan belum ada. Jalankan SQL aset_penyusutan.sql dulu.");
+  const dateStr = `${year}-${String(month).padStart(2,"0")}-28`;
+  // buat jurnal
+  const { data: je, error: eh } = await supabase.from("journal_entries").insert({
+    org_id: orgId,
+    entry_date: dateStr,
+    memo: `Penyusutan ${asset.name} — ${month}/${year}`,
+    cash_source: null,
+    kind: "general",
+  }).select().single();
+  if (eh) throw eh;
+  const { error: el } = await supabase.from("journal_lines").insert([
+    { entry_id: je.id, account_id: bebanId, debit: amount, credit: 0 },
+    { entry_id: je.id, account_id: akumId, debit: 0, credit: amount },
+  ]);
+  if (el) throw el;
+  // catat posting
+  const { error: ep } = await supabase.from("depreciation_postings").insert({
+    org_id: orgId, asset_id: asset.id,
+    period_year: year, period_month: month,
+    amount, entry_id: je.id,
+  });
+  if (ep) throw ep;
+  return true;
+}
+
+// Ambil jadwal penyusutan per bulan untuk satu aset (dengan status posting)
+export async function getDepreciationSchedule(orgId, assetId, asOf) {
+  const { data, error } = await supabase.rpc("depreciation_schedule", {
+    p_org: orgId, p_asset: assetId, p_as_of: asOf,
+  });
+  if (error) throw error;
+  return data;
+}
+
+// Posting satu bulan spesifik (dipakai per-bulan & oleh post-all)
+export async function postDepreciationMonth(orgId, asset, year, month, amount, acctByCode) {
+  const bebanId = acctByCode["6-60900"]?.id;
+  const akumId = acctByCode["1-10800"]?.id;
+  if (!bebanId || !akumId) throw new Error("Akun penyusutan belum ada. Jalankan SQL aset_penyusutan.sql dulu.");
+  const dateStr = `${year}-${String(month).padStart(2,"0")}-28`;
+  const { data: je, error: eh } = await supabase.from("journal_entries").insert({
+    org_id: orgId, entry_date: dateStr,
+    memo: `Penyusutan ${asset.name} — ${month}/${year}`,
+    cash_source: null, kind: "general",
+  }).select().single();
+  if (eh) throw eh;
+  const { error: el } = await supabase.from("journal_lines").insert([
+    { entry_id: je.id, account_id: bebanId, debit: amount, credit: 0 },
+    { entry_id: je.id, account_id: akumId, debit: 0, credit: amount },
+  ]);
+  if (el) throw el;
+  const { error: ep } = await supabase.from("depreciation_postings").insert({
+    org_id: orgId, asset_id: asset.id,
+    period_year: year, period_month: month, amount, entry_id: je.id,
+  });
+  if (ep) throw ep;
+  return true;
+}
+
+// Posting SEMUA bulan yang belum diposting (tertunggak) untuk satu aset
+export async function postAllOutstanding(orgId, asset, asOf, acctByCode) {
+  const schedule = await getDepreciationSchedule(orgId, asset.id, asOf);
+  const belum = schedule.filter(s => !s.is_posted);
+  let count = 0;
+  for (const s of belum) {
+    await postDepreciationMonth(orgId, asset, s.period_year, s.period_month, Number(s.amount), acctByCode);
+    count++;
+  }
+  return count;
+}
+
+// ---- Saldo Awal (opening balance) ----
+export async function hasOpeningBalance(orgId) {
+  const { data, error } = await supabase.rpc("has_opening_balance", { p_org: orgId });
+  if (error) throw error;
+  return data;
+}
+
+// Simpan saldo awal: buat jurnal kind='opening'.
+// lines = [{account_id, debit, credit}], harus seimbang; modal owner sbagai penyeimbang.
+export async function saveOpeningBalance(orgId, date, lines) {
+  const { data: je, error: eh } = await supabase.from("journal_entries").insert({
+    org_id: orgId, entry_date: date,
+    memo: "Saldo Awal (Opening Balance)",
+    cash_source: null, kind: "opening",
+  }).select().single();
+  if (eh) throw eh;
+  const rows = lines
+    .filter(l => (l.debit||0) > 0 || (l.credit||0) > 0)
+    .map(l => ({ entry_id: je.id, account_id: l.account_id, debit: l.debit||0, credit: l.credit||0 }));
+  const { error: el } = await supabase.from("journal_lines").insert(rows);
+  if (el) throw el;
+  return je;
+}
+
+// ---- Pendapatan Diterima di Muka ----
+export async function getDeferredSummary(orgId, asOf) {
+  const { data, error } = await supabase.rpc("deferred_summary", { p_org: orgId, p_as_of: asOf });
+  if (error) throw error;
+  return data;
+}
+
+// Catat penerimaan di muka: jurnal Debet Kas/Bank, Kredit Pendapatan Diterima di Muka (2-20005)
+export async function addDeferredRevenue(orgId, d, acctByCode) {
+  const cashId = d.cash === "kas" ? acctByCode["1-10007"]?.id : acctByCode["1-10002"]?.id;
+  const defAccId = acctByCode["2-20005"]?.id;
+  if (!cashId || !defAccId) throw new Error("Akun Kas/Bank atau Pendapatan Diterima di Muka belum ada.");
+  const { data: je, error: eh } = await supabase.from("journal_entries").insert({
+    org_id: orgId, entry_date: d.received_date,
+    memo: d.description || "Penerimaan di muka",
+    cash_source: d.cash, kind: "general",
+  }).select().single();
+  if (eh) throw eh;
+  const { error: el } = await supabase.from("journal_lines").insert([
+    { entry_id: je.id, account_id: cashId, debit: d.total_amount, credit: 0 },
+    { entry_id: je.id, account_id: defAccId, debit: 0, credit: d.total_amount },
+  ]);
+  if (el) throw el;
+  const { error: ed } = await supabase.from("deferred_revenue").insert({
+    org_id: orgId, received_date: d.received_date, description: d.description,
+    total_amount: d.total_amount, months: d.months, branch: d.branch || null, entry_id: je.id,
+  });
+  if (ed) throw ed;
+  return je;
+}
+
+export async function deleteDeferredRevenue(id) {
+  const { error } = await supabase.from("deferred_revenue").delete().eq("id", id);
+  if (error) throw error;
+}
+
+export async function getDeferredSchedule(orgId, deferredId, asOf) {
+  const { data, error } = await supabase.rpc("deferred_schedule", {
+    p_org: orgId, p_deferred: deferredId, p_as_of: asOf,
+  });
+  if (error) throw error;
+  return data;
+}
+
+// Akui satu bulan: jurnal Debet Pendapatan Diterima di Muka (2-20005), Kredit Pendapatan (4-40000)
+export async function recognizeDeferredMonth(orgId, deferred, year, month, amount, acctByCode, revenueCode) {
+  const defAccId = acctByCode["2-20005"]?.id;
+  const revId = acctByCode[revenueCode || "4-40000"]?.id;
+  if (!defAccId || !revId) throw new Error("Akun pendapatan belum lengkap.");
+  const dateStr = `${year}-${String(month).padStart(2,"0")}-28`;
+  const { data: je, error: eh } = await supabase.from("journal_entries").insert({
+    org_id: orgId, entry_date: dateStr,
+    memo: `Pengakuan pendapatan — ${deferred.description||"diterima di muka"} (${month}/${year})`,
+    cash_source: null, kind: "general",
+  }).select().single();
+  if (eh) throw eh;
+  const { error: el } = await supabase.from("journal_lines").insert([
+    { entry_id: je.id, account_id: defAccId, debit: amount, credit: 0 },
+    { entry_id: je.id, account_id: revId, debit: 0, credit: amount },
+  ]);
+  if (el) throw el;
+  const { error: er } = await supabase.from("deferred_recognitions").insert({
+    org_id: orgId, deferred_id: deferred.id,
+    period_year: year, period_month: month, amount, entry_id: je.id,
+  });
+  if (er) throw er;
+  return true;
+}
+
+export async function recognizeAllDue(orgId, deferred, asOf, acctByCode, revenueCode) {
+  const sched = await getDeferredSchedule(orgId, deferred.id, asOf);
+  const belum = sched.filter(s => !s.is_recognized);
+  let n = 0;
+  for (const s of belum) {
+    await recognizeDeferredMonth(orgId, deferred, s.period_year, s.period_month, Number(s.amount), acctByCode, revenueCode);
+    n++;
+  }
+  return n;
+}
+
+/* ============================================================
+   PENGEMBANGAN USAHA
+   Butuh tabel initiatives & initiative_accounts serta RPC
+   initiative_actuals / initiative_monthly — dibuat lewat
+   pengembangan_usaha.sql di Supabase.
+   ============================================================ */
+
+// ---- daftar inisiatif ----
 export async function getInitiatives(orgId) {
   const { data, error } = await supabase
     .from("initiatives")
@@ -107,4 +628,13 @@ export async function rpcInitiativeMonthly(orgId, initiativeId, year) {
   });
   if (error) throw error;
   return data || [];
+}
+
+// ---- Auth ----
+export async function signIn(email, password) {
+  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) throw error;
+}
+export async function signOut() {
+  await supabase.auth.signOut();
 }
