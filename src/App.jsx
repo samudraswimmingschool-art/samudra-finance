@@ -2947,8 +2947,15 @@ function Pengembangan({ orgId, accounts }) {
       start_date: form.start_date || null,
     };
     try {
-      if (editId && editId!=="baru") { await updateInitiative(editId, payload); setFlash("✓ Rencana diperbarui"); }
-      else { await addInitiative(orgId, payload); setFlash("✓ Rencana ditambahkan"); }
+      if (editId && editId!=="baru") {
+        await updateInitiative(editId, payload);
+        setFlash("✓ Rencana diperbarui");
+      } else {
+        const baru = await addInitiative(orgId, payload);
+        // langsung buka kartunya di tab Produk supaya rinciannya mudah ditemukan
+        if (baru?.id) { setBuka(baru.id); setTab("produk"); }
+        setFlash("✓ Rencana tersimpan — lanjutkan mengisi rincian produk di bawah");
+      }
       setEditId(null); setForm(kosong());
       await reload();
     } catch(err){ setFlash("✗ "+err.message); }
@@ -3260,10 +3267,12 @@ function Pengembangan({ orgId, accounts }) {
                       {h.kurang>0 ? `kurang ${moneyShort(h.kurang)}` : "dana siap"}</div>
                   </div>
                   <div className="no-print" style={{ display:"flex", gap:4, alignItems:"center" }}>
-                    <button className="btn" onClick={()=>{ setBuka(terbuka?null:r.id); setTab("ringkas"); }}
-                      title={terbuka?"Tutup rincian":"Lihat rincian"}
-                      style={{ background:"transparent", color:C.sub, display:"grid", placeItems:"center", padding:4 }}>
-                      {terbuka?<ChevronUp size={16}/>:<ChevronDown size={16}/>}</button>
+                    <button className="btn" onClick={()=>{ setBuka(terbuka?null:r.id); setTab(terbuka?"ringkas":(nProd===0?"produk":"ringkas")); }}
+                      title={terbuka?"Tutup rincian":"Buka rincian produk, penjualan & pemasaran"}
+                      style={{ display:"flex", alignItems:"center", gap:5, padding:"7px 12px",
+                        borderRadius:8, fontSize:12, fontWeight:600, whiteSpace:"nowrap",
+                        background: terbuka ? C.surf : C.teal, color: terbuka ? C.sub : "#fff" }}>
+                      {terbuka?<><ChevronUp size={14}/> Tutup</>:<><ChevronDown size={14}/> Rincian</>}</button>
                     <button className="btn" onClick={()=>bukaTaut(r)} title="Tautkan akun COA"
                       style={{ background:"transparent", color:tertaut>0?C.pos:C.brass,
                         display:"grid", placeItems:"center", padding:4 }}><Link2 size={15} /></button>
