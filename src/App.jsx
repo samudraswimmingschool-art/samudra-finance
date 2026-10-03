@@ -29,6 +29,9 @@ import {
   rpcPnl, rpcBalanceSheet, rpcRetainedProfit, rpcCashFlow, rpcAccountBalances,
   getInitiatives, addInitiative, updateInitiative, setInitiativeStatus,
   deleteInitiative, setInitiativeAccounts, rpcInitiativeActuals, rpcInitiativeMonthly,
+  addProduct, updateProduct, deleteProduct,
+  addChannel, updateChannel, deleteChannel,
+  addMarketing, updateMarketing, deleteMarketing,
   periodRange, signOut,
 } from "./lib/api";
 
@@ -2830,7 +2833,8 @@ const Cell2 = ({ l, v, bold }) => (
 );
 
 // ============================================================
-// PENGEMBANGAN USAHA — rencana, pendanaan, proyeksi, realisasi
+// PENGEMBANGAN USAHA — rencana, pendanaan, proyeksi, realisasi,
+// plus rincian produk, kanal penjualan, dan pemasaran
 // ============================================================
 const KATEGORI_INISIATIF = ["Produk Baru","Cabang Baru","Peralatan","Layanan","Lainnya"];
 const STATUS_INISIATIF = {
@@ -2847,6 +2851,21 @@ const SUMBER_DANA = {
   investor: "Investor",
   campuran: "Gabungan beberapa sumber",
 };
+const JENIS_KANAL = {
+  marketplace: { label:"Marketplace", tone:C.teal,  contoh:"Shopee, Tokopedia, TikTok Shop" },
+  sosial:      { label:"Media Sosial",tone:C.brass, contoh:"Instagram, WhatsApp, TikTok" },
+  offline:     { label:"Offline",     tone:C.kas,   contoh:"Dijual langsung saat kelas / event" },
+  reseller:    { label:"Reseller",    tone:C.pos,   contoh:"Pelatih, mitra, toko lain" },
+};
+const JENIS_PEMASARAN = {
+  sosmed:     { label:"Konten Sosmed", tone:C.teal },
+  iklan:      { label:"Iklan Berbayar",tone:C.brass },
+  promo:      { label:"Promo & Diskon",tone:C.kas },
+  kolaborasi: { label:"Kolaborasi",    tone:C.pos },
+  lainnya:    { label:"Lainnya",       tone:C.sub },
+};
+// fee platform yang lazim, dipakai sebagai saran saat mengisi
+const SARAN_FEE = { "Shopee":8, "Tokopedia":7, "TikTok Shop":8, "Lazada":7, "Instagram":0, "WhatsApp":0 };
 
 function Pengembangan({ orgId, accounts }) {
   const [rows, setRows] = useState([]);
@@ -2857,6 +2876,7 @@ function Pengembangan({ orgId, accounts }) {
   const [flash, setFlash] = useState("");
   const [editId, setEditId] = useState(null);     // id yang sedang diedit, "baru" = tambah
   const [buka, setBuka] = useState(null);         // id yang detailnya dibuka
+  const [tab, setTab] = useState("ringkas");      // tab di dalam kartu yang terbuka
   const [tautFor, setTautFor] = useState(null);   // id yang sedang diatur tautan akunnya
   const [tautPilih, setTautPilih] = useState([]);
 
@@ -2900,7 +2920,6 @@ function Pengembangan({ orgId, accounts }) {
     const cost    = Number(r.proj_cost_month)||0;
     const labaBln = rev - cost;
     const kurang  = Math.max(0, modal - siap);
-    // titik impas: berapa bulan sampai modal kembali
     const bep     = labaBln > 0 ? modal / labaBln : null;
     const roi     = modal > 0 ? (labaBln*12)/modal : null;
     const margin  = rev > 0 ? labaBln/rev : null;
@@ -2910,13 +2929,12 @@ function Pengembangan({ orgId, accounts }) {
     const aAset   = Number(a.aset)||0;
     const aLaba   = aRev - aBeban;
     const aTrx    = Number(a.jml_transaksi)||0;
-    const modalTerpakai = aAset + (aLaba < 0 ? -aLaba : 0);
     return { modal, siap, rev, cost, labaBln, kurang, bep, roi, margin,
-             aRev, aBeban, aAset, aLaba, aTrx, modalTerpakai,
+             aRev, aBeban, aAset, aLaba, aTrx,
              adaAktual: aTrx > 0 || aRev !== 0 || aBeban !== 0 || aAset !== 0 };
   };
 
-  // ---- simpan ----
+  // ---- simpan rencana ----
   const simpan = async () => {
     if (!form.name.trim()) { setFlash("✗ Nama rencana wajib diisi"); return; }
     setBusy(true); setFlash("");
@@ -2953,12 +2971,35 @@ function Pengembangan({ orgId, accounts }) {
   };
 
   const hapus = async (r) => {
-    if (!confirm(`Hapus rencana "${r.name}"? Jurnal yang sudah tercatat tidak ikut terhapus.`)) return;
+    if (!confirm(`Hapus rencana "${r.name}" beserta seluruh rincian produk, kanal, dan pemasarannya? Jurnal yang sudah tercatat tidak ikut terhapus.`)) return;
     try { await deleteInitiative(r.id); reload(); } catch(err){ alert(err.message); }
   };
 
   const ubahStatus = async (r, status) => {
     try { await setInitiativeStatus(r.id, status); reload(); } catch(err){ alert(err.message); }
+  };
+
+  // ---- terapkan hitungan dari rincian produk ke angka rencana ----
+  const terapkanProyeksi = async (r, ring) => {
+    if (!confirm(`Tulis ulang angka rencana "${r.name}" dari rincian produk?\n\n`+
+      `Modal dibutuhkan : ${money(ring.modalStok)}\n`+
+      `Pendapatan/bulan : ${money(ring.omzetBln)}\n`+
+      `Biaya/bulan      : ${money(ring.biayaBln)}`)) return;
+    setBusy(true);
+    try {
+      await updateInitiative(r.id, {
+        name:r.name, category:r.category, status:r.status, branch:r.branch,
+        start_date:r.start_date, description:r.description,
+        capital_needed: Math.round(ring.modalStok),
+        funding_secured: Number(r.funding_secured)||0,
+        funding_source: r.funding_source,
+        proj_revenue_month: Math.round(ring.omzetBln),
+        proj_cost_month: Math.round(ring.biayaBln),
+      });
+      setFlash("✓ Angka rencana diperbarui dari rincian produk");
+      await reload();
+    } catch(err){ setFlash("✗ "+err.message); }
+    setBusy(false);
   };
 
   // ---- penautan akun ----
@@ -2997,7 +3038,7 @@ function Pengembangan({ orgId, accounts }) {
     <div className="pop">
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:10 }}>
         <PageHead eyebrow="Perencanaan" title="Pengembangan Usaha"
-          sub={`Rencana ekspansi, kebutuhan modal, proyeksi kelayakan, & realisasinya · ${YEAR}`} />
+          sub={`Rencana ekspansi, rincian produk, pendanaan, pemasaran, & realisasinya · ${YEAR}`} />
         <div style={{ display:"flex", gap:8, marginTop:4 }}>
           <button className="btn no-print" onClick={()=>window.print()}
             style={{ display:"flex", alignItems:"center", gap:6, background:C.deep, color:"#fff",
@@ -3048,7 +3089,7 @@ function Pengembangan({ orgId, accounts }) {
           <label style={lbl}>Latar belakang & strategi</label>
           <textarea rows={4} value={form.description}
             onChange={e=>setForm({...form,description:e.target.value})}
-            placeholder={"Kenapa rencana ini dijalankan, siapa targetnya, bagaimana cara menjalankannya, dan apa risikonya.\n\nmis. Menjual kaos, kacamata, dan pelampung bermerek Samudra ke siswa aktif. Dijual saat kelas berlangsung dan lewat Instagram. Risiko: stok tidak laku, jadi mulai dari jumlah kecil."}
+            placeholder={"Kenapa rencana ini dijalankan, siapa targetnya, dan apa risikonya.\n\nmis. Menjual kaos, kacamata, dan pelampung bermerek Samudra ke siswa aktif. Risiko: stok tidak laku, jadi mulai dari jumlah kecil."}
             style={{ ...inp, height:"auto", lineHeight:1.6, resize:"vertical", marginBottom:14 }} />
 
           <div style={{ fontSize:11, fontWeight:700, color:C.brass, letterSpacing:".06em", marginBottom:8 }}>PENDANAAN</div>
@@ -3064,7 +3105,11 @@ function Pengembangan({ orgId, accounts }) {
                 {Object.entries(SUMBER_DANA).map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></div>
           </div>
 
-          <div style={{ fontSize:11, fontWeight:700, color:C.brass, letterSpacing:".06em", marginBottom:8 }}>PROYEKSI BULANAN</div>
+          <div style={{ fontSize:11, fontWeight:700, color:C.brass, letterSpacing:".06em", marginBottom:4 }}>PROYEKSI BULANAN</div>
+          <div style={{ fontSize:11.5, color:C.sub, marginBottom:8, lineHeight:1.5 }}>
+            Boleh dikosongkan dulu — setelah rincian produk diisi, angka ini bisa dihitung otomatis
+            lewat tombol di tab Produk.
+          </div>
           <div className="row-stack" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:10 }}>
             <div><label style={lbl}>Perkiraan pendapatan / bulan (Rp)</label>
               <input className="mono" inputMode="numeric" placeholder="0" value={form.proj_revenue_month}
@@ -3074,7 +3119,6 @@ function Pengembangan({ orgId, accounts }) {
                 onChange={e=>setForm({...form,proj_cost_month:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
           </div>
 
-          {/* pratinjau kelayakan langsung saat mengetik */}
           {(()=>{
             const h = hitung({ ...form, id:"__preview__",
               capital_needed:+form.capital_needed||0, funding_secured:+form.funding_secured||0,
@@ -3115,10 +3159,11 @@ function Pengembangan({ orgId, accounts }) {
         <div className="card" style={{ padding:32, textAlign:"center" }}>
           <Rocket size={40} color={C.brass} style={{ marginBottom:12 }} />
           <div style={{ fontSize:15.5, fontWeight:600, marginBottom:6 }}>Belum ada rencana pengembangan</div>
-          <div style={{ fontSize:13, color:C.sub, lineHeight:1.6, maxWidth:520, margin:"0 auto 18px" }}>
+          <div style={{ fontSize:13, color:C.sub, lineHeight:1.6, maxWidth:540, margin:"0 auto 18px" }}>
             Catat rencana ekspansi di sini — lini produk baru, cabang baru, atau pembelian peralatan.
-            Aplikasi menghitung kebutuhan modal, titik balik modal, dan ROI-nya, lalu membandingkan
-            dengan realisasi yang terbaca sendiri dari jurnal.
+            Untuk produk, kamu bisa merinci bahan, vendor, harga produksi, harga jual, kanal penjualan
+            seperti Shopee, sampai rencana kontennya. Aplikasi menghitung modal, margin, titik balik
+            modal, dan ROI-nya sendiri.
           </div>
           <button className="btn" onClick={()=>{ setEditId("baru"); setForm(kosong()); }}
             style={{ background:C.teal, color:"#fff", padding:"11px 22px", borderRadius:9, fontWeight:700, fontSize:14 }}>
@@ -3175,9 +3220,13 @@ function Pengembangan({ orgId, accounts }) {
         <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
           {urut.map(r=>{
             const h = hitung(r);
+            const ring = ringkasProduk(r);
             const st = STATUS_INISIATIF[r.status] || STATUS_INISIATIF.ide;
             const tertaut = (r.initiative_accounts||[]).length;
             const terbuka = buka===r.id;
+            const nProd = (r.initiative_products||[]).length;
+            const nKanal = (r.initiative_channels||[]).length;
+            const nMark = (r.initiative_marketing||[]).length;
             return (
               <div key={r.id} className="card" style={{ overflow:"hidden", borderLeft:`4px solid ${st.tone}` }}>
                 {/* kepala kartu */}
@@ -3196,6 +3245,8 @@ function Pengembangan({ orgId, accounts }) {
                     <div style={{ fontSize:11.5, color:C.sub }}>
                       {r.start_date ? `Target mulai ${r.start_date}` : "Belum ada target mulai"}
                       {" · "}{SUMBER_DANA[r.funding_source]||"—"}
+                      {nProd>0 && <> · <b style={{ color:C.ink }}>{nProd}</b> produk</>}
+                      {nKanal>0 && <> · <b style={{ color:C.ink }}>{nKanal}</b> kanal jual</>}
                       {" · "}
                       {tertaut>0
                         ? <span style={{ color:C.pos, fontWeight:600 }}>{tertaut} akun tertaut</span>
@@ -3209,7 +3260,7 @@ function Pengembangan({ orgId, accounts }) {
                       {h.kurang>0 ? `kurang ${moneyShort(h.kurang)}` : "dana siap"}</div>
                   </div>
                   <div className="no-print" style={{ display:"flex", gap:4, alignItems:"center" }}>
-                    <button className="btn" onClick={()=>setBuka(terbuka?null:r.id)}
+                    <button className="btn" onClick={()=>{ setBuka(terbuka?null:r.id); setTab("ringkas"); }}
                       title={terbuka?"Tutup rincian":"Lihat rincian"}
                       style={{ background:"transparent", color:C.sub, display:"grid", placeItems:"center", padding:4 }}>
                       {terbuka?<ChevronUp size={16}/>:<ChevronDown size={16}/>}</button>
@@ -3238,93 +3289,44 @@ function Pengembangan({ orgId, accounts }) {
                     c={h.adaAktual?(h.aLaba>=0?C.pos:C.neg):C.sub} />
                 </div>
 
-                {/* rincian */}
+                {/* rincian bertab */}
                 {terbuka && (
-                  <div className="pop" style={{ padding:"16px 18px", borderTop:`1px solid ${C.line}` }}>
-                    {r.description && (
-                      <div style={{ marginBottom:16 }}>
-                        <div style={{ fontSize:10.5, fontWeight:700, color:C.brass,
-                          letterSpacing:".06em", marginBottom:6 }}>LATAR BELAKANG & STRATEGI</div>
-                        <div style={{ fontSize:13, lineHeight:1.7, color:C.ink, whiteSpace:"pre-wrap" }}>
-                          {r.description}</div>
-                      </div>
-                    )}
-
-                    <div className="grid-auto" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
-                      {/* pendanaan */}
-                      <div style={{ border:`1px solid ${C.line}`, borderRadius:11, padding:"14px 16px" }}>
-                        <div style={{ fontWeight:700, fontSize:13, marginBottom:10 }}>Pendanaan</div>
-                        <RowLine l="Modal dibutuhkan" v={h.modal} />
-                        <RowLine l="Dana tersedia" v={h.siap} c={C.pos} />
-                        <div style={{ borderTop:`1px solid ${C.line}`, marginTop:6, paddingTop:8 }}>
-                          <RowLine l="Kekurangan" v={h.kurang} c={h.kurang>0?C.neg:C.pos} bold />
-                        </div>
-                        <div style={{ height:8, borderRadius:99, background:C.surf, overflow:"hidden", marginTop:10 }}>
-                          <div style={{ height:"100%", borderRadius:99, background:h.kurang>0?C.brass:C.pos,
-                            width:`${h.modal>0?Math.min(100,(h.siap/h.modal)*100):0}%` }} /></div>
-                        <div style={{ fontSize:11, color:C.sub, marginTop:6 }}>
-                          Sumber: {SUMBER_DANA[r.funding_source]||"—"}
-                          {h.kurang>0 && <> · {h.kurang<=danaTersedia
-                            ? "kekurangan masih tertutup kas saat ini"
-                            : "kekurangan melebihi kas saat ini"}</>}
-                        </div>
-                      </div>
-
-                      {/* proyeksi vs aktual */}
-                      <div style={{ border:`1px solid ${C.line}`, borderRadius:11, padding:"14px 16px" }}>
-                        <div style={{ fontWeight:700, fontSize:13, marginBottom:10 }}>Proyeksi vs Realisasi</div>
-                        <div style={{ display:"grid", gridTemplateColumns:"1fr 90px 90px",
-                          fontSize:10.5, color:C.sub, fontWeight:600, paddingBottom:6 }}>
-                          <span></span><span style={{ textAlign:"right" }}>PROYEKSI</span>
-                          <span style={{ textAlign:"right" }}>AKTUAL</span></div>
-                        <BandingBaris l="Pendapatan / bln" a={h.rev}
-                          b={h.adaAktual?h.aRev:null} tone={C.pos} />
-                        <BandingBaris l="Biaya / bln" a={h.cost}
-                          b={h.adaAktual?h.aBeban:null} tone={C.neg} />
-                        <div style={{ borderTop:`1px solid ${C.line}`, marginTop:6, paddingTop:6 }}>
-                          <BandingBaris l="Laba" a={h.labaBln}
-                            b={h.adaAktual?h.aLaba:null} bold />
-                        </div>
-                        <div style={{ fontSize:11, color:C.sub, marginTop:9, lineHeight:1.5 }}>
-                          {tertaut===0
-                            ? <>Belum ada akun tertaut, jadi kolom aktual masih kosong. Klik ikon rantai
-                                di kartu ini untuk memilih akun pendapatan & biaya yang terkait.</>
-                            : <>Aktual dihitung dari {tertaut} akun tertaut, akumulasi sepanjang {YEAR}
-                                ({h.aTrx} transaksi). Angka proyeksi bersifat per bulan, jadi bandingkan
-                                dengan memperhatikan sudah berapa bulan rencana ini berjalan.</>}
-                        </div>
-                        {h.aAset>0 && (
-                          <div style={{ fontSize:11.5, color:C.ink, marginTop:8, padding:"7px 10px",
-                            borderRadius:7, background:C.surf }}>
-                            Modal yang sudah dibelanjakan (aset tetap): <b>{money(h.aAset)}</b>
-                            {h.modal>0 && <> dari rencana {money(h.modal)} ({pct(h.aAset/h.modal)})</>}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* penilaian otomatis */}
-                    <div style={{ marginTop:14 }}>
-                      {penilaianInisiatif(h, r, danaTersedia).map((p,i)=>(
-                        <div key={i} style={{ display:"flex", gap:9, alignItems:"flex-start",
-                          padding:"9px 13px", borderRadius:9, marginBottom:7,
-                          background:p.tone+"0D", borderLeft:`3px solid ${p.tone}` }}>
-                          <span style={{ fontSize:12.5, color:C.ink, lineHeight:1.55 }}>{p.m}</span>
-                        </div>
+                  <div className="pop" style={{ borderTop:`1px solid ${C.line}` }}>
+                    <div className="no-print scroll-x" style={{ display:"flex", gap:2, padding:"10px 14px 0",
+                      borderBottom:`1px solid ${C.line}` }}>
+                      {[
+                        { k:"ringkas", l:"Ringkasan" },
+                        { k:"produk",  l:`Produk${nProd?` (${nProd})`:""}` },
+                        { k:"jual",    l:`Penjualan${nKanal?` (${nKanal})`:""}` },
+                        { k:"pasar",   l:`Pemasaran${nMark?` (${nMark})`:""}` },
+                      ].map(t=>(
+                        <button key={t.k} className="btn" onClick={()=>setTab(t.k)}
+                          style={{ padding:"8px 14px", borderRadius:"8px 8px 0 0", fontSize:12.5,
+                            fontWeight:tab===t.k?700:500, whiteSpace:"nowrap",
+                            background:tab===t.k?C.surf:"transparent",
+                            color:tab===t.k?C.deep:C.sub,
+                            borderBottom:tab===t.k?`2px solid ${C.teal}`:"2px solid transparent" }}>
+                          {t.l}</button>
                       ))}
                     </div>
 
-                    {/* ubah status cepat */}
-                    <div className="no-print" style={{ marginTop:12, display:"flex", gap:6,
-                      alignItems:"center", flexWrap:"wrap" }}>
-                      <span style={{ fontSize:11.5, color:C.sub, marginRight:2 }}>Ubah status:</span>
-                      {Object.entries(STATUS_INISIATIF).map(([k,v])=>(
-                        <button key={k} className="btn" onClick={()=>ubahStatus(r,k)}
-                          disabled={r.status===k}
-                          style={{ padding:"5px 11px", borderRadius:7, fontSize:11.5, fontWeight:600,
-                            background:r.status===k?v.tone:C.surf, color:r.status===k?"#fff":C.sub,
-                            cursor:r.status===k?"default":"pointer" }}>{v.label}</button>
-                      ))}
+                    <div style={{ padding:"16px 18px" }}>
+                      {tab==="ringkas" && (
+                        <TabRingkas r={r} h={h} ring={ring} danaTersedia={danaTersedia}
+                          tertaut={tertaut} ubahStatus={ubahStatus} />
+                      )}
+                      {tab==="produk" && (
+                        <TabProduk r={r} ring={ring} onChange={reload} busy={busy} setBusy={setBusy}
+                          setFlash={setFlash} terapkan={()=>terapkanProyeksi(r, ring)} />
+                      )}
+                      {tab==="jual" && (
+                        <TabKanal r={r} ring={ring} onChange={reload} busy={busy} setBusy={setBusy}
+                          setFlash={setFlash} />
+                      )}
+                      {tab==="pasar" && (
+                        <TabPemasaran r={r} ring={ring} onChange={reload} busy={busy} setBusy={setBusy}
+                          setFlash={setFlash} />
+                      )}
                     </div>
                   </div>
                 )}
@@ -3406,6 +3408,647 @@ function Pengembangan({ orgId, accounts }) {
   );
 }
 
+/* ---- hitungan gabungan dari rincian produk, kanal, dan pemasaran ---- */
+function ringkasProduk(r) {
+  const produk = r.initiative_products || [];
+  const kanal  = r.initiative_channels || [];
+  const mark   = r.initiative_marketing || [];
+
+  const modalStok = produk.reduce((s,p)=>s+(Number(p.cost_unit)||0)*(Number(p.qty_initial)||0), 0);
+  const omzetBln  = produk.reduce((s,p)=>s+(Number(p.price_unit)||0)*(Number(p.qty_month)||0), 0);
+  const hppBln    = produk.reduce((s,p)=>s+(Number(p.cost_unit)||0)*(Number(p.qty_month)||0), 0);
+
+  // potongan platform: tertimbang menurut porsi penjualan tiap kanal
+  const feePctEfektif = kanal.reduce((s,c)=>
+    s + ((Number(c.share_pct)||0)/100) * ((Number(c.fee_pct)||0)/100), 0);
+  const feeBln    = omzetBln * feePctEfektif;
+  const budgetBln = mark.reduce((s,m)=>s+(Number(m.budget_month)||0), 0);
+
+  const biayaBln  = hppBln + feeBln + budgetBln;
+  const labaBln   = omzetBln - biayaBln;
+  const marginBln = omzetBln > 0 ? labaBln/omzetBln : null;
+  const bep       = labaBln > 0 && modalStok > 0 ? modalStok/labaBln : null;
+  const totalShare = kanal.reduce((s,c)=>s+(Number(c.share_pct)||0), 0);
+
+  return { produk, kanal, mark, modalStok, omzetBln, hppBln, feeBln, budgetBln,
+           biayaBln, labaBln, marginBln, bep, feePctEfektif, totalShare,
+           ada: produk.length>0 };
+}
+
+/* ---- Tab: Ringkasan ---- */
+function TabRingkas({ r, h, ring, danaTersedia, tertaut, ubahStatus }) {
+  return (
+    <>
+      {r.description && (
+        <div style={{ marginBottom:16 }}>
+          <div style={{ fontSize:10.5, fontWeight:700, color:C.brass,
+            letterSpacing:".06em", marginBottom:6 }}>LATAR BELAKANG & STRATEGI</div>
+          <div style={{ fontSize:13, lineHeight:1.7, color:C.ink, whiteSpace:"pre-wrap" }}>
+            {r.description}</div>
+        </div>
+      )}
+
+      <div className="grid-auto" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
+        <div style={{ border:`1px solid ${C.line}`, borderRadius:11, padding:"14px 16px" }}>
+          <div style={{ fontWeight:700, fontSize:13, marginBottom:10 }}>Pendanaan</div>
+          <RowLine l="Modal dibutuhkan" v={h.modal} />
+          <RowLine l="Dana tersedia" v={h.siap} c={C.pos} />
+          <div style={{ borderTop:`1px solid ${C.line}`, marginTop:6, paddingTop:8 }}>
+            <RowLine l="Kekurangan" v={h.kurang} c={h.kurang>0?C.neg:C.pos} bold />
+          </div>
+          <div style={{ height:8, borderRadius:99, background:C.surf, overflow:"hidden", marginTop:10 }}>
+            <div style={{ height:"100%", borderRadius:99, background:h.kurang>0?C.brass:C.pos,
+              width:`${h.modal>0?Math.min(100,(h.siap/h.modal)*100):0}%` }} /></div>
+          <div style={{ fontSize:11, color:C.sub, marginTop:6 }}>
+            Sumber: {SUMBER_DANA[r.funding_source]||"—"}
+            {h.kurang>0 && <> · {h.kurang<=danaTersedia
+              ? "kekurangan masih tertutup kas saat ini"
+              : "kekurangan melebihi kas saat ini"}</>}
+          </div>
+        </div>
+
+        <div style={{ border:`1px solid ${C.line}`, borderRadius:11, padding:"14px 16px" }}>
+          <div style={{ fontWeight:700, fontSize:13, marginBottom:10 }}>Proyeksi vs Realisasi</div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 90px 90px",
+            fontSize:10.5, color:C.sub, fontWeight:600, paddingBottom:6 }}>
+            <span></span><span style={{ textAlign:"right" }}>PROYEKSI</span>
+            <span style={{ textAlign:"right" }}>AKTUAL</span></div>
+          <BandingBaris l="Pendapatan / bln" a={h.rev} b={h.adaAktual?h.aRev:null} tone={C.pos} />
+          <BandingBaris l="Biaya / bln" a={h.cost} b={h.adaAktual?h.aBeban:null} tone={C.neg} />
+          <div style={{ borderTop:`1px solid ${C.line}`, marginTop:6, paddingTop:6 }}>
+            <BandingBaris l="Laba" a={h.labaBln} b={h.adaAktual?h.aLaba:null} bold />
+          </div>
+          <div style={{ fontSize:11, color:C.sub, marginTop:9, lineHeight:1.5 }}>
+            {tertaut===0
+              ? <>Belum ada akun tertaut, jadi kolom aktual masih kosong. Klik ikon rantai
+                  di kartu ini untuk memilih akun pendapatan & biaya yang terkait.</>
+              : <>Aktual dihitung dari {tertaut} akun tertaut, akumulasi sepanjang {YEAR}
+                  ({h.aTrx} transaksi). Angka proyeksi bersifat per bulan.</>}
+          </div>
+          {h.aAset>0 && (
+            <div style={{ fontSize:11.5, color:C.ink, marginTop:8, padding:"7px 10px",
+              borderRadius:7, background:C.surf }}>
+              Modal yang sudah dibelanjakan (aset tetap): <b>{money(h.aAset)}</b>
+              {h.modal>0 && <> dari rencana {money(h.modal)} ({pct(h.aAset/h.modal)})</>}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div style={{ marginTop:14 }}>
+        {penilaianInisiatif(h, r, danaTersedia, ring).map((p,i)=>(
+          <div key={i} style={{ display:"flex", gap:9, alignItems:"flex-start",
+            padding:"9px 13px", borderRadius:9, marginBottom:7,
+            background:p.tone+"0D", borderLeft:`3px solid ${p.tone}` }}>
+            <span style={{ fontSize:12.5, color:C.ink, lineHeight:1.55 }}>{p.m}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="no-print" style={{ marginTop:12, display:"flex", gap:6,
+        alignItems:"center", flexWrap:"wrap" }}>
+        <span style={{ fontSize:11.5, color:C.sub, marginRight:2 }}>Ubah status:</span>
+        {Object.entries(STATUS_INISIATIF).map(([k,v])=>(
+          <button key={k} className="btn" onClick={()=>ubahStatus(r,k)} disabled={r.status===k}
+            style={{ padding:"5px 11px", borderRadius:7, fontSize:11.5, fontWeight:600,
+              background:r.status===k?v.tone:C.surf, color:r.status===k?"#fff":C.sub,
+              cursor:r.status===k?"default":"pointer" }}>{v.label}</button>
+        ))}
+      </div>
+    </>
+  );
+}
+
+/* ---- Tab: Produk ---- */
+function TabProduk({ r, ring, onChange, busy, setBusy, setFlash, terapkan }) {
+  const kosong = () => ({ name:"", variant:"", unit:"pcs", material:"", vendor:"",
+    vendor_contact:"", cost_unit:"", price_unit:"", qty_initial:"", qty_month:"", notes:"" });
+  const [form, setForm] = useState(kosong());
+  const [edit, setEdit] = useState(null);   // null | "baru" | id
+
+  const isi = (p) => {
+    setEdit(p.id);
+    setForm({ name:p.name||"", variant:p.variant||"", unit:p.unit||"pcs",
+      material:p.material||"", vendor:p.vendor||"", vendor_contact:p.vendor_contact||"",
+      cost_unit:String(Math.round(Number(p.cost_unit)||0)||""),
+      price_unit:String(Math.round(Number(p.price_unit)||0)||""),
+      qty_initial:String(Number(p.qty_initial)||""),
+      qty_month:String(Number(p.qty_month)||""), notes:p.notes||"" });
+  };
+
+  const simpan = async () => {
+    if (!form.name.trim()) { setFlash("✗ Nama produk wajib diisi"); return; }
+    setBusy(true); setFlash("");
+    const v = { ...form,
+      cost_unit:+form.cost_unit||0, price_unit:+form.price_unit||0,
+      qty_initial:+form.qty_initial||0, qty_month:+form.qty_month||0 };
+    try {
+      if (edit && edit!=="baru") await updateProduct(edit, v);
+      else await addProduct(r.id, v);
+      setFlash("✓ Produk tersimpan"); setEdit(null); setForm(kosong()); await onChange();
+    } catch(err){ setFlash("✗ "+err.message); }
+    setBusy(false);
+  };
+
+  const hapus = async (p) => {
+    if (!confirm(`Hapus produk "${p.name}"?`)) return;
+    try { await deleteProduct(p.id); onChange(); } catch(err){ alert(err.message); }
+  };
+
+  const cu = +form.cost_unit||0, pu = +form.price_unit||0;
+  const marginUnit = pu - cu;
+  const marginPct = pu > 0 ? marginUnit/pu : null;
+
+  return (
+    <>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
+        marginBottom:12, flexWrap:"wrap", gap:8 }}>
+        <div style={{ fontSize:12.5, color:C.sub, lineHeight:1.55, flex:1, minWidth:220 }}>
+          Rinci tiap produk beserta bahan, vendor, harga produksi, dan rencana harga jualnya.
+          Modal stok awal dan proyeksi bulanan dihitung dari sini.
+        </div>
+        <button className="btn no-print" onClick={()=>{ setEdit(edit?null:"baru"); setForm(kosong()); }}
+          style={{ display:"flex", alignItems:"center", gap:6, background:edit?C.surf:C.teal,
+            color:edit?C.sub:"#fff", padding:"8px 14px", borderRadius:8, fontSize:12.5, fontWeight:600 }}>
+          {edit ? <><X size={14}/> Tutup</> : <><Plus size={14}/> Tambah Produk</>}</button>
+      </div>
+
+      {edit && (
+        <div className="pop no-print" style={{ border:`2px solid ${edit==="baru"?C.teal:C.brass}`,
+          borderRadius:11, padding:16, marginBottom:14 }}>
+          <div className="row-stack" style={{ display:"grid", gridTemplateColumns:"2fr 1fr 80px", gap:10, marginBottom:10 }}>
+            <div><label style={lbl}>Nama Produk</label>
+              <input placeholder="mis. Kaos Latihan Samudra" value={form.name}
+                onChange={e=>setForm({...form,name:e.target.value})} style={inp} /></div>
+            <div><label style={lbl}>Varian</label>
+              <input placeholder="mis. S / M / L — Navy" value={form.variant}
+                onChange={e=>setForm({...form,variant:e.target.value})} style={inp} /></div>
+            <div><label style={lbl}>Satuan</label>
+              <input placeholder="pcs" value={form.unit}
+                onChange={e=>setForm({...form,unit:e.target.value})} style={inp} /></div>
+          </div>
+
+          <div className="row-stack" style={{ display:"grid", gridTemplateColumns:"1.3fr 1fr 1fr", gap:10, marginBottom:10 }}>
+            <div><label style={lbl}>Bahan / Spesifikasi</label>
+              <input placeholder="mis. Cotton combed 30s, sablon DTF" value={form.material}
+                onChange={e=>setForm({...form,material:e.target.value})} style={inp} /></div>
+            <div><label style={lbl}>Vendor / Konveksi</label>
+              <input placeholder="mis. Konveksi Jaya Bandung" value={form.vendor}
+                onChange={e=>setForm({...form,vendor:e.target.value})} style={inp} /></div>
+            <div><label style={lbl}>Kontak Vendor</label>
+              <input placeholder="mis. 0812xxxx / @ig" value={form.vendor_contact}
+                onChange={e=>setForm({...form,vendor_contact:e.target.value})} style={inp} /></div>
+          </div>
+
+          <div className="row-stack" style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:10, marginBottom:10 }}>
+            <div><label style={lbl}>Harga Produksi / unit</label>
+              <input className="mono" inputMode="numeric" placeholder="0" value={form.cost_unit}
+                onChange={e=>setForm({...form,cost_unit:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
+            <div><label style={lbl}>Harga Jual / unit</label>
+              <input className="mono" inputMode="numeric" placeholder="0" value={form.price_unit}
+                onChange={e=>setForm({...form,price_unit:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
+            <div><label style={lbl}>Produksi Awal (qty)</label>
+              <input className="mono" inputMode="numeric" placeholder="0" value={form.qty_initial}
+                onChange={e=>setForm({...form,qty_initial:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
+            <div><label style={lbl}>Target Jual / bulan (qty)</label>
+              <input className="mono" inputMode="numeric" placeholder="0" value={form.qty_month}
+                onChange={e=>setForm({...form,qty_month:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
+          </div>
+
+          <label style={lbl}>Catatan</label>
+          <input placeholder="mis. minimum order 50 pcs, waktu produksi 10 hari" value={form.notes}
+            onChange={e=>setForm({...form,notes:e.target.value})} style={{ ...inp, marginBottom:12 }} />
+
+          {pu>0 && (
+            <div style={{ background:C.surf, borderRadius:9, padding:"10px 13px", marginBottom:12, fontSize:12.5 }}>
+              <div className="grid-2" style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:10 }}>
+                <Cell2 l="Margin / unit" v={money(marginUnit)} bold />
+                <Cell2 l="Margin %" v={marginPct===null?"—":pct(marginPct)} bold />
+                <Cell2 l="Modal stok awal" v={money(cu*(+form.qty_initial||0))} bold />
+                <Cell2 l="Omzet / bulan" v={money(pu*(+form.qty_month||0))} bold />
+              </div>
+              {marginUnit<=0 && (
+                <div style={{ marginTop:8, color:C.neg, fontSize:12 }}>
+                  Harga jual belum menutup harga produksi — produk ini rugi per unitnya.
+                </div>
+              )}
+              {marginPct!==null && marginPct>0 && marginPct<0.25 && (
+                <div style={{ marginTop:8, color:C.brass, fontSize:12 }}>
+                  Margin {pct(marginPct)} tergolong tipis untuk produk fisik. Potongan marketplace
+                  dan ongkos kirim bisa menggerusnya lagi — pertimbangkan menaikkan harga jual.
+                </div>
+              )}
+            </div>
+          )}
+
+          <button className="btn" onClick={simpan} disabled={busy||!form.name.trim()}
+            style={{ width:"100%", padding:"10px", borderRadius:9,
+              background:(form.name.trim()&&!busy)?(edit==="baru"?C.teal:C.brass):C.line,
+              color:"#fff", fontWeight:700, fontSize:13.5 }}>
+            {busy?"Menyimpan…":(edit==="baru"?"Simpan Produk":"Simpan Perubahan")}</button>
+        </div>
+      )}
+
+      {ring.produk.length===0 && !edit && (
+        <div style={{ padding:"24px 18px", textAlign:"center", border:`1px dashed ${C.line}`,
+          borderRadius:11, color:C.sub, fontSize:13 }}>
+          Belum ada produk. Klik <b>Tambah Produk</b> untuk mulai merinci.
+        </div>
+      )}
+
+      {ring.produk.length>0 && (
+        <div className="scroll-x" style={{ border:`1px solid ${C.line}`, borderRadius:11, overflow:"hidden" }}>
+          <div style={{ display:"grid", gridTemplateColumns:"1.6fr 1.2fr 100px 100px 80px 70px 100px 70px",
+            padding:"9px 14px", background:C.deep, color:"#DDECEC", fontSize:10, fontWeight:600 }}>
+            <span>PRODUK</span><span>BAHAN / VENDOR</span>
+            <span style={{ textAlign:"right" }}>PRODUKSI</span>
+            <span style={{ textAlign:"right" }}>JUAL</span>
+            <span style={{ textAlign:"center" }}>MARGIN</span>
+            <span style={{ textAlign:"center" }}>STOK</span>
+            <span style={{ textAlign:"right" }}>OMZET/BLN</span>
+            <span style={{ textAlign:"center" }}>AKSI</span>
+          </div>
+          {ring.produk.map(p=>{
+            const c = Number(p.cost_unit)||0, pr = Number(p.price_unit)||0;
+            const m = pr - c, mp = pr>0 ? m/pr : null;
+            return (
+              <div key={p.id} style={{ display:"grid",
+                gridTemplateColumns:"1.6fr 1.2fr 100px 100px 80px 70px 100px 70px",
+                padding:"10px 14px", borderBottom:`1px solid ${C.line}`, fontSize:12, alignItems:"center" }}>
+                <span>
+                  <b style={{ color:C.deep }}>{p.name}</b>
+                  {p.variant && <span style={{ color:C.sub }}> · {p.variant}</span>}
+                  {p.notes && <div style={{ fontSize:10.5, color:C.sub, marginTop:2 }}>{p.notes}</div>}
+                </span>
+                <span style={{ fontSize:11, color:C.sub, lineHeight:1.4 }}>
+                  {p.material || "—"}
+                  {p.vendor && <div style={{ marginTop:2 }}>{p.vendor}
+                    {p.vendor_contact && <span style={{ color:C.line }}> · {p.vendor_contact}</span>}</div>}
+                </span>
+                <span className="mono" style={{ textAlign:"right", color:C.sub }}>{money(c)}</span>
+                <span className="mono" style={{ textAlign:"right", fontWeight:600 }}>{money(pr)}</span>
+                <span className="mono" style={{ textAlign:"center", fontWeight:700,
+                  color:m>0?C.pos:C.neg }}>{mp===null?"—":pct(mp)}</span>
+                <span className="mono" style={{ textAlign:"center", color:C.sub }}>
+                  {Number(p.qty_initial)||0}</span>
+                <span className="mono" style={{ textAlign:"right", color:C.teal, fontWeight:600 }}>
+                  {money(pr*(Number(p.qty_month)||0))}</span>
+                <span className="no-print" style={{ display:"flex", gap:3, justifyContent:"center" }}>
+                  <button className="btn" onClick={()=>isi(p)} title="Ubah"
+                    style={{ background:"transparent", color:C.sub, padding:2 }}><Pencil size={13} /></button>
+                  <button className="btn" onClick={()=>hapus(p)} title="Hapus"
+                    style={{ background:"transparent", color:C.sub, padding:2 }}><Trash2 size={13} /></button>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ringkasan hitungan produk */}
+      {ring.ada && (
+        <div style={{ marginTop:14, border:`1px solid ${C.teal}40`, borderRadius:11,
+          background:C.teal+"08", padding:"14px 16px" }}>
+          <div style={{ fontWeight:700, fontSize:13, marginBottom:10 }}>
+            Hitungan dari Rincian Produk</div>
+          <div className="grid-2" style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)",
+            gap:12, marginBottom:12 }}>
+            <Cell2 l="Modal stok awal" v={money(ring.modalStok)} bold />
+            <Cell2 l="Omzet / bulan" v={money(ring.omzetBln)} bold />
+            <Cell2 l="Biaya / bulan" v={money(ring.biayaBln)} bold />
+            <Cell2 l="Laba / bulan" v={money(ring.labaBln)} bold />
+          </div>
+          <div style={{ fontSize:11.5, color:C.sub, lineHeight:1.6, marginBottom:12 }}>
+            Biaya bulanan = HPP {money(ring.hppBln)}
+            {ring.feeBln>0 && <> + potongan platform {money(ring.feeBln)}</>}
+            {ring.budgetBln>0 && <> + anggaran pemasaran {money(ring.budgetBln)}</>}.
+            {ring.marginBln!==null && <> Margin bersih <b>{pct(ring.marginBln)}</b>.</>}
+            {ring.bep!==null && <> Modal stok kembali dalam <b>{ring.bep.toFixed(1)} bulan</b>.</>}
+          </div>
+          <button className="btn no-print" onClick={terapkan} disabled={busy}
+            style={{ display:"flex", alignItems:"center", gap:7, background:C.teal, color:"#fff",
+              padding:"9px 16px", borderRadius:8, fontSize:12.5, fontWeight:600 }}>
+            <Check size={14} /> Terapkan ke angka rencana</button>
+          <div style={{ fontSize:11, color:C.sub, marginTop:8, lineHeight:1.5 }}>
+            Menimpa kolom modal dibutuhkan, pendapatan/bulan, dan biaya/bulan di rencana ini dengan
+            angka hasil hitungan di atas — supaya kartu kelayakan dan portofolio ikut akurat.
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ---- Tab: Kanal penjualan ---- */
+function TabKanal({ r, ring, onChange, busy, setBusy, setFlash }) {
+  const kosong = () => ({ name:"", kind:"marketplace", fee_pct:"", share_pct:"",
+    status:"rencana", notes:"" });
+  const [form, setForm] = useState(kosong());
+  const [edit, setEdit] = useState(null);
+
+  const isi = (c) => {
+    setEdit(c.id);
+    setForm({ name:c.name||"", kind:c.kind||"marketplace",
+      fee_pct:String(Number(c.fee_pct)||""), share_pct:String(Number(c.share_pct)||""),
+      status:c.status||"rencana", notes:c.notes||"" });
+  };
+
+  const simpan = async () => {
+    if (!form.name.trim()) { setFlash("✗ Nama kanal wajib diisi"); return; }
+    setBusy(true); setFlash("");
+    const v = { ...form, fee_pct:+form.fee_pct||0, share_pct:+form.share_pct||0 };
+    try {
+      if (edit && edit!=="baru") await updateChannel(edit, v);
+      else await addChannel(r.id, v);
+      setFlash("✓ Kanal tersimpan"); setEdit(null); setForm(kosong()); await onChange();
+    } catch(err){ setFlash("✗ "+err.message); }
+    setBusy(false);
+  };
+
+  const hapus = async (c) => {
+    if (!confirm(`Hapus kanal "${c.name}"?`)) return;
+    try { await deleteChannel(c.id); onChange(); } catch(err){ alert(err.message); }
+  };
+
+  // isi saran fee saat nama kanal dikenali
+  const pilihNama = (nama) => {
+    const saran = SARAN_FEE[nama];
+    setForm(f=>({ ...f, name:nama, fee_pct: saran!==undefined ? String(saran) : f.fee_pct }));
+  };
+
+  const shareOk = ring.totalShare === 0 || Math.abs(ring.totalShare - 100) < 0.5;
+
+  return (
+    <>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
+        marginBottom:12, flexWrap:"wrap", gap:8 }}>
+        <div style={{ fontSize:12.5, color:C.sub, lineHeight:1.55, flex:1, minWidth:220 }}>
+          Tentukan di mana produk dijual dan berapa potongan tiap platform. Potongan ini ikut
+          dihitung sebagai biaya, supaya proyeksi labanya realistis.
+        </div>
+        <button className="btn no-print" onClick={()=>{ setEdit(edit?null:"baru"); setForm(kosong()); }}
+          style={{ display:"flex", alignItems:"center", gap:6, background:edit?C.surf:C.teal,
+            color:edit?C.sub:"#fff", padding:"8px 14px", borderRadius:8, fontSize:12.5, fontWeight:600 }}>
+          {edit ? <><X size={14}/> Tutup</> : <><Plus size={14}/> Tambah Kanal</>}</button>
+      </div>
+
+      {edit && (
+        <div className="pop no-print" style={{ border:`2px solid ${edit==="baru"?C.teal:C.brass}`,
+          borderRadius:11, padding:16, marginBottom:14 }}>
+          <div className="row-stack" style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr", gap:10, marginBottom:10 }}>
+            <div><label style={lbl}>Nama Kanal</label>
+              <input placeholder="mis. Shopee" value={form.name}
+                onChange={e=>setForm({...form,name:e.target.value})} style={inp} />
+              <div style={{ display:"flex", gap:5, flexWrap:"wrap", marginTop:6 }}>
+                {Object.keys(SARAN_FEE).map(n=>(
+                  <button key={n} className="btn" onClick={()=>pilihNama(n)}
+                    style={{ padding:"4px 9px", borderRadius:20, fontSize:10.5, fontWeight:600,
+                      background:C.surf, color:C.sub }}>{n}</button>
+                ))}
+              </div>
+            </div>
+            <div><label style={lbl}>Jenis</label>
+              <select value={form.kind} onChange={e=>setForm({...form,kind:e.target.value})} style={inp}>
+                {Object.entries(JENIS_KANAL).map(([k,v])=>
+                  <option key={k} value={k}>{v.label} — {v.contoh}</option>)}</select></div>
+          </div>
+
+          <div className="row-stack" style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginBottom:10 }}>
+            <div><label style={lbl}>Potongan platform (%)</label>
+              <input className="mono" inputMode="decimal" placeholder="0" value={form.fee_pct}
+                onChange={e=>setForm({...form,fee_pct:e.target.value.replace(/[^\d.]/g,"")})} style={inp} /></div>
+            <div><label style={lbl}>Perkiraan porsi penjualan (%)</label>
+              <input className="mono" inputMode="decimal" placeholder="0" value={form.share_pct}
+                onChange={e=>setForm({...form,share_pct:e.target.value.replace(/[^\d.]/g,"")})} style={inp} /></div>
+            <div><label style={lbl}>Status</label>
+              <select value={form.status} onChange={e=>setForm({...form,status:e.target.value})} style={inp}>
+                <option value="rencana">Rencana</option>
+                <option value="aktif">Aktif</option>
+                <option value="ditutup">Ditutup</option></select></div>
+          </div>
+
+          <label style={lbl}>Catatan / strategi kanal</label>
+          <input placeholder="mis. gratis ongkir minimal 2 pcs, ikut kampanye tanggal kembar" value={form.notes}
+            onChange={e=>setForm({...form,notes:e.target.value})} style={{ ...inp, marginBottom:12 }} />
+
+          <button className="btn" onClick={simpan} disabled={busy||!form.name.trim()}
+            style={{ width:"100%", padding:"10px", borderRadius:9,
+              background:(form.name.trim()&&!busy)?(edit==="baru"?C.teal:C.brass):C.line,
+              color:"#fff", fontWeight:700, fontSize:13.5 }}>
+            {busy?"Menyimpan…":(edit==="baru"?"Simpan Kanal":"Simpan Perubahan")}</button>
+        </div>
+      )}
+
+      {ring.kanal.length===0 && !edit && (
+        <div style={{ padding:"24px 18px", textAlign:"center", border:`1px dashed ${C.line}`,
+          borderRadius:11, color:C.sub, fontSize:13 }}>
+          Belum ada kanal penjualan. Tambahkan Shopee, TikTok Shop, Instagram, atau penjualan
+          langsung saat kelas.
+        </div>
+      )}
+
+      {ring.kanal.length>0 && <>
+        <div className="scroll-x" style={{ border:`1px solid ${C.line}`, borderRadius:11, overflow:"hidden" }}>
+          <div style={{ display:"grid", gridTemplateColumns:"1.3fr 1fr 90px 90px 110px 70px",
+            padding:"9px 14px", background:C.deep, color:"#DDECEC", fontSize:10, fontWeight:600 }}>
+            <span>KANAL</span><span>JENIS</span>
+            <span style={{ textAlign:"center" }}>POTONGAN</span>
+            <span style={{ textAlign:"center" }}>PORSI</span>
+            <span style={{ textAlign:"right" }}>OMZET/BLN</span>
+            <span style={{ textAlign:"center" }}>AKSI</span>
+          </div>
+          {ring.kanal.map(c=>{
+            const jk = JENIS_KANAL[c.kind] || JENIS_KANAL.marketplace;
+            const share = Number(c.share_pct)||0;
+            const omzetKanal = ring.omzetBln * share/100;
+            return (
+              <div key={c.id} style={{ display:"grid",
+                gridTemplateColumns:"1.3fr 1fr 90px 90px 110px 70px",
+                padding:"10px 14px", borderBottom:`1px solid ${C.line}`, fontSize:12, alignItems:"center" }}>
+                <span>
+                  <b style={{ color:C.deep }}>{c.name}</b>
+                  {c.status!=="rencana" && <span style={{ fontSize:9.5, fontWeight:700, marginLeft:6,
+                    padding:"1px 6px", borderRadius:20,
+                    background:(c.status==="aktif"?C.pos:C.neg)+"18",
+                    color:c.status==="aktif"?C.pos:C.neg }}>{c.status.toUpperCase()}</span>}
+                  {c.notes && <div style={{ fontSize:10.5, color:C.sub, marginTop:2 }}>{c.notes}</div>}
+                </span>
+                <span style={{ fontSize:11, color:jk.tone, fontWeight:600 }}>{jk.label}</span>
+                <span className="mono" style={{ textAlign:"center",
+                  color:Number(c.fee_pct)>0?C.neg:C.sub }}>{Number(c.fee_pct)||0}%</span>
+                <span className="mono" style={{ textAlign:"center" }}>{share}%</span>
+                <span className="mono" style={{ textAlign:"right", color:C.teal, fontWeight:600 }}>
+                  {ring.omzetBln>0?money(omzetKanal):"—"}</span>
+                <span className="no-print" style={{ display:"flex", gap:3, justifyContent:"center" }}>
+                  <button className="btn" onClick={()=>isi(c)} title="Ubah"
+                    style={{ background:"transparent", color:C.sub, padding:2 }}><Pencil size={13} /></button>
+                  <button className="btn" onClick={()=>hapus(c)} title="Hapus"
+                    style={{ background:"transparent", color:C.sub, padding:2 }}><Trash2 size={13} /></button>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+
+        <div style={{ marginTop:12, padding:"11px 14px", borderRadius:9, fontSize:12.5,
+          lineHeight:1.6, color:C.ink,
+          background: shareOk ? C.surf : C.brass+"10",
+          border: shareOk ? "none" : `1px solid ${C.brass}40` }}>
+          {!shareOk && <>Porsi penjualan semua kanal berjumlah <b>{ring.totalShare}%</b>, bukan 100%.
+            Sesuaikan agar perhitungan potongan platform akurat. </>}
+          {ring.omzetBln>0 && <>Potongan platform efektif <b>{pct(ring.feePctEfektif)}</b> dari omzet,
+            atau sekitar <b>{money(ring.feeBln)}</b> per bulan. </>}
+          {ring.omzetBln===0 && <>Isi target jual per bulan di tab Produk untuk melihat perkiraan
+            omzet per kanal.</>}
+        </div>
+      </>}
+    </>
+  );
+}
+
+/* ---- Tab: Pemasaran ---- */
+function TabPemasaran({ r, ring, onChange, busy, setBusy, setFlash }) {
+  const kosong = () => ({ channel:"", kind:"sosmed", plan:"", budget_month:"",
+    target:"", status:"rencana" });
+  const [form, setForm] = useState(kosong());
+  const [edit, setEdit] = useState(null);
+
+  const isi = (m) => {
+    setEdit(m.id);
+    setForm({ channel:m.channel||"", kind:m.kind||"sosmed", plan:m.plan||"",
+      budget_month:String(Math.round(Number(m.budget_month)||0)||""),
+      target:m.target||"", status:m.status||"rencana" });
+  };
+
+  const simpan = async () => {
+    if (!form.channel.trim()) { setFlash("✗ Kanal pemasaran wajib diisi"); return; }
+    setBusy(true); setFlash("");
+    const v = { ...form, budget_month:+form.budget_month||0 };
+    try {
+      if (edit && edit!=="baru") await updateMarketing(edit, v);
+      else await addMarketing(r.id, v);
+      setFlash("✓ Aktivitas pemasaran tersimpan"); setEdit(null); setForm(kosong()); await onChange();
+    } catch(err){ setFlash("✗ "+err.message); }
+    setBusy(false);
+  };
+
+  const hapus = async (m) => {
+    if (!confirm(`Hapus aktivitas "${m.channel}"?`)) return;
+    try { await deleteMarketing(m.id); onChange(); } catch(err){ alert(err.message); }
+  };
+
+  const rasioMark = ring.omzetBln > 0 ? ring.budgetBln/ring.omzetBln : null;
+
+  return (
+    <>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
+        marginBottom:12, flexWrap:"wrap", gap:8 }}>
+        <div style={{ fontSize:12.5, color:C.sub, lineHeight:1.55, flex:1, minWidth:220 }}>
+          Rencana konten, iklan, promo, dan kolaborasi — berikut anggarannya. Total anggaran
+          ikut masuk ke proyeksi biaya bulanan.
+        </div>
+        <button className="btn no-print" onClick={()=>{ setEdit(edit?null:"baru"); setForm(kosong()); }}
+          style={{ display:"flex", alignItems:"center", gap:6, background:edit?C.surf:C.teal,
+            color:edit?C.sub:"#fff", padding:"8px 14px", borderRadius:8, fontSize:12.5, fontWeight:600 }}>
+          {edit ? <><X size={14}/> Tutup</> : <><Plus size={14}/> Tambah Aktivitas</>}</button>
+      </div>
+
+      {edit && (
+        <div className="pop no-print" style={{ border:`2px solid ${edit==="baru"?C.teal:C.brass}`,
+          borderRadius:11, padding:16, marginBottom:14 }}>
+          <div className="row-stack" style={{ display:"grid", gridTemplateColumns:"1.2fr 1fr 1fr", gap:10, marginBottom:10 }}>
+            <div><label style={lbl}>Kanal / Platform</label>
+              <input placeholder="mis. Instagram Reels" value={form.channel}
+                onChange={e=>setForm({...form,channel:e.target.value})} style={inp} /></div>
+            <div><label style={lbl}>Jenis</label>
+              <select value={form.kind} onChange={e=>setForm({...form,kind:e.target.value})} style={inp}>
+                {Object.entries(JENIS_PEMASARAN).map(([k,v])=>
+                  <option key={k} value={k}>{v.label}</option>)}</select></div>
+            <div><label style={lbl}>Anggaran / bulan (Rp)</label>
+              <input className="mono" inputMode="numeric" placeholder="0" value={form.budget_month}
+                onChange={e=>setForm({...form,budget_month:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
+          </div>
+
+          <label style={lbl}>Rencana aktivitas</label>
+          <textarea rows={3} value={form.plan}
+            onChange={e=>setForm({...form,plan:e.target.value})}
+            placeholder={"Apa yang dikerjakan dan seberapa sering.\n\nmis. 3 Reels per minggu: cuplikan latihan siswa pakai merchandise, testimoni orang tua, dan behind the scene produksi."}
+            style={{ ...inp, height:"auto", lineHeight:1.6, resize:"vertical", marginBottom:10 }} />
+
+          <div className="row-stack" style={{ display:"grid", gridTemplateColumns:"2fr 1fr", gap:10, marginBottom:12 }}>
+            <div><label style={lbl}>Target terukur</label>
+              <input placeholder="mis. jangkauan 50rb/bulan, 20 pesanan dari IG" value={form.target}
+                onChange={e=>setForm({...form,target:e.target.value})} style={inp} /></div>
+            <div><label style={lbl}>Status</label>
+              <select value={form.status} onChange={e=>setForm({...form,status:e.target.value})} style={inp}>
+                <option value="rencana">Rencana</option>
+                <option value="jalan">Berjalan</option>
+                <option value="selesai">Selesai</option></select></div>
+          </div>
+
+          <button className="btn" onClick={simpan} disabled={busy||!form.channel.trim()}
+            style={{ width:"100%", padding:"10px", borderRadius:9,
+              background:(form.channel.trim()&&!busy)?(edit==="baru"?C.teal:C.brass):C.line,
+              color:"#fff", fontWeight:700, fontSize:13.5 }}>
+            {busy?"Menyimpan…":(edit==="baru"?"Simpan Aktivitas":"Simpan Perubahan")}</button>
+        </div>
+      )}
+
+      {ring.mark.length===0 && !edit && (
+        <div style={{ padding:"24px 18px", textAlign:"center", border:`1px dashed ${C.line}`,
+          borderRadius:11, color:C.sub, fontSize:13 }}>
+          Belum ada rencana pemasaran. Tambahkan rencana konten Instagram, iklan berbayar, promo
+          peluncuran, atau kolaborasi.
+        </div>
+      )}
+
+      {ring.mark.length>0 && <>
+        <div style={{ display:"flex", flexDirection:"column", gap:9 }}>
+          {ring.mark.map(m=>{
+            const jm = JENIS_PEMASARAN[m.kind] || JENIS_PEMASARAN.lainnya;
+            return (
+              <div key={m.id} style={{ border:`1px solid ${C.line}`, borderLeft:`3px solid ${jm.tone}`,
+                borderRadius:10, padding:"12px 14px" }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:6 }}>
+                  <span style={{ fontWeight:700, fontSize:13.5 }}>{m.channel}</span>
+                  <span style={{ fontSize:9.5, fontWeight:700, padding:"2px 8px", borderRadius:20,
+                    background:jm.tone+"18", color:jm.tone }}>{jm.label.toUpperCase()}</span>
+                  {m.status!=="rencana" && <span style={{ fontSize:10, color:C.sub }}>· {m.status}</span>}
+                  <span className="mono" style={{ marginLeft:"auto", fontSize:13, fontWeight:700,
+                    color:Number(m.budget_month)>0?C.neg:C.sub }}>
+                    {Number(m.budget_month)>0 ? `${money(Number(m.budget_month))}/bln` : "tanpa biaya"}</span>
+                  <span className="no-print" style={{ display:"flex", gap:3 }}>
+                    <button className="btn" onClick={()=>isi(m)} title="Ubah"
+                      style={{ background:"transparent", color:C.sub, padding:2 }}><Pencil size={13} /></button>
+                    <button className="btn" onClick={()=>hapus(m)} title="Hapus"
+                      style={{ background:"transparent", color:C.sub, padding:2 }}><Trash2 size={13} /></button>
+                  </span>
+                </div>
+                {m.plan && <div style={{ fontSize:12.5, color:C.ink, lineHeight:1.6,
+                  whiteSpace:"pre-wrap", marginBottom:m.target?6:0 }}>{m.plan}</div>}
+                {m.target && <div style={{ fontSize:11.5, color:C.sub }}>
+                  <b>Target:</b> {m.target}</div>}
+              </div>
+            );
+          })}
+        </div>
+
+        <div style={{ marginTop:12, padding:"11px 14px", borderRadius:9, background:C.surf,
+          fontSize:12.5, lineHeight:1.6, color:C.ink }}>
+          Total anggaran pemasaran <b>{money(ring.budgetBln)}</b> per bulan
+          {rasioMark!==null && <> — sekitar <b>{pct(rasioMark)}</b> dari proyeksi omzet.
+            {rasioMark > 0.25
+              ? " Porsi ini cukup besar; wajar saat peluncuran, tapi turunkan setelah penjualan stabil."
+              : rasioMark > 0 && rasioMark < 0.05
+                ? " Porsi ini kecil — untuk produk baru biasanya perlu dorongan lebih besar di awal agar dikenal."
+                : " Porsi ini wajar untuk produk yang sedang dibangun."}</>}
+          {rasioMark===null && <> Isi target jual per bulan di tab Produk untuk melihat porsinya terhadap omzet.</>}
+        </div>
+      </>}
+    </>
+  );
+}
+
 const KpiMini = ({ l, v, c }) => (
   <div style={{ background:"#fff", padding:"11px 14px" }}>
     <div style={{ fontSize:10.5, color:C.sub }}>{l}</div>
@@ -3423,13 +4066,15 @@ const BandingBaris = ({ l, a, b, tone, bold }) => (
   </div>
 );
 
-// penilaian otomatis satu rencana — dipakai di bagian rincian
-function penilaianInisiatif(h, r, danaTersedia) {
+// penilaian otomatis satu rencana — dipakai di tab Ringkasan
+function penilaianInisiatif(h, r, danaTersedia, ring) {
   const out = [];
-  if (h.modal === 0 && h.rev === 0) {
-    out.push({ tone:C.sub, m:"Angka modal dan proyeksi belum diisi, jadi kelayakannya belum bisa dinilai. Isi lewat tombol ubah." });
+  if (h.modal === 0 && h.rev === 0 && !(ring && ring.ada)) {
+    out.push({ tone:C.sub, m:"Angka modal dan proyeksi belum diisi, jadi kelayakannya belum bisa dinilai. Isi lewat tombol ubah, atau rinci produknya di tab Produk." });
     return out;
   }
+  if (ring && ring.ada && h.rev === 0)
+    out.push({ tone:C.brass, m:`Rincian produk sudah ada (omzet ${money(ring.omzetBln)}/bulan), tapi angka rencana masih kosong. Buka tab Produk lalu tekan "Terapkan ke angka rencana" supaya kelayakannya terhitung.` });
   if (h.labaBln <= 0 && h.rev > 0)
     out.push({ tone:C.neg, m:`Dengan proyeksi sekarang, biaya bulanan (${money(h.cost)}) menyamai atau melebihi pendapatan (${money(h.rev)}). Rencana ini tidak akan balik modal — tinjau harga jual, volume, atau struktur biayanya dulu.` });
   if (h.bep !== null && h.bep > 0) {
@@ -3450,21 +4095,19 @@ function penilaianInisiatif(h, r, danaTersedia) {
   }
   if (h.margin !== null && h.margin > 0 && h.margin < 0.15)
     out.push({ tone:C.brass, m:`Margin proyeksi hanya ${pct(h.margin)} — tipis, jadi sedikit saja biaya meleset bisa membuat rugi. Beri ruang aman pada perhitungan biayanya.` });
-  if (h.adaAktual && h.rev > 0) {
-    const bulanJalan = r.start_date ? Math.max(1, Math.round(
-      (new Date(`${YEAR}-12-31`) - new Date(r.start_date)) / (1000*60*60*24*30))) : null;
-    if (bulanJalan && bulanJalan > 0) {
-      const harusnya = h.rev * Math.min(bulanJalan, 12);
-      if (harusnya > 0) {
-        const capai = h.aRev / harusnya;
-        if (capai >= 1)
-          out.push({ tone:C.pos, m:`Realisasi pendapatan ${money(h.aRev)} sudah melampaui proyeksi untuk masa berjalan (${pct(capai)} dari perkiraan). Proyeksi berikutnya bisa dinaikkan.` });
-        else if (capai >= 0.6)
-          out.push({ tone:C.brass, m:`Realisasi pendapatan ${money(h.aRev)}, sekitar ${pct(capai)} dari proyeksi untuk masa berjalan. Belum sesuai rencana, tapi masih dalam jangkauan.` });
-        else
-          out.push({ tone:C.neg, m:`Realisasi pendapatan baru ${pct(capai)} dari proyeksi masa berjalan (${money(h.aRev)} dari perkiraan ${money(harusnya)}). Tinjau apakah proyeksinya terlalu optimistis atau eksekusinya yang tersendat.` });
-      }
-    }
+  // penilaian khusus dari rincian produk
+  if (ring && ring.ada) {
+    const rugi = ring.produk.filter(p=>(Number(p.price_unit)||0) <= (Number(p.cost_unit)||0)
+      && (Number(p.price_unit)||0) > 0);
+    if (rugi.length > 0)
+      out.push({ tone:C.neg, m:`${rugi.length} produk harga jualnya belum menutup harga produksi (${rugi.map(p=>p.name).join(", ")}). Perbaiki harganya sebelum produksi dimulai.` });
+    const belumHarga = ring.produk.filter(p=>!(Number(p.price_unit)||0));
+    if (belumHarga.length > 0)
+      out.push({ tone:C.sub, m:`${belumHarga.length} produk belum punya rencana harga jual, jadi belum ikut terhitung di proyeksi.` });
+    if (ring.kanal.length === 0)
+      out.push({ tone:C.brass, m:"Belum ada kanal penjualan. Tentukan di tab Penjualan — potongan marketplace seperti Shopee bisa memangkas margin cukup besar kalau tidak diperhitungkan." });
+    if (ring.mark.length === 0)
+      out.push({ tone:C.brass, m:"Belum ada rencana pemasaran. Produk baru biasanya perlu dorongan konten dan promo di awal agar dikenal." });
   }
   if (r.status === "ide")
     out.push({ tone:C.sub, m:"Status masih Ide. Pindahkan ke Kajian setelah angka modal dan proyeksinya dihitung serius." });

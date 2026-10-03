@@ -527,11 +527,15 @@ export async function recognizeAllDue(orgId, deferred, asOf, acctByCode, revenue
    pengembangan_usaha.sql di Supabase.
    ============================================================ */
 
-// ---- daftar inisiatif ----
+// ---- daftar inisiatif (sekaligus rincian produk, kanal, pemasaran) ----
 export async function getInitiatives(orgId) {
   const { data, error } = await supabase
     .from("initiatives")
-    .select("*, initiative_accounts(id, account_id)")
+    .select(`*,
+      initiative_accounts(id, account_id),
+      initiative_products(*),
+      initiative_channels(*),
+      initiative_marketing(*)`)
     .eq("org_id", orgId)
     .order("created_at", { ascending: false });
   if (error) throw error;
@@ -628,6 +632,90 @@ export async function rpcInitiativeMonthly(orgId, initiativeId, year) {
   });
   if (error) throw error;
   return data || [];
+}
+
+/* ---- Rincian produk ---- */
+export async function addProduct(initiativeId, p) {
+  const { data, error } = await supabase.from("initiative_products").insert({
+    initiative_id: initiativeId,
+    name: p.name, variant: p.variant || null, unit: p.unit || "pcs",
+    material: p.material || null, vendor: p.vendor || null,
+    vendor_contact: p.vendor_contact || null,
+    cost_unit: p.cost_unit || 0, price_unit: p.price_unit || 0,
+    qty_initial: p.qty_initial || 0, qty_month: p.qty_month || 0,
+    notes: p.notes || null,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateProduct(id, p) {
+  const { error } = await supabase.from("initiative_products").update({
+    name: p.name, variant: p.variant || null, unit: p.unit || "pcs",
+    material: p.material || null, vendor: p.vendor || null,
+    vendor_contact: p.vendor_contact || null,
+    cost_unit: p.cost_unit || 0, price_unit: p.price_unit || 0,
+    qty_initial: p.qty_initial || 0, qty_month: p.qty_month || 0,
+    notes: p.notes || null,
+  }).eq("id", id);
+  if (error) throw error;
+}
+
+export async function deleteProduct(id) {
+  const { error } = await supabase.from("initiative_products").delete().eq("id", id);
+  if (error) throw error;
+}
+
+/* ---- Kanal penjualan ---- */
+export async function addChannel(initiativeId, c) {
+  const { data, error } = await supabase.from("initiative_channels").insert({
+    initiative_id: initiativeId,
+    name: c.name, kind: c.kind || "marketplace",
+    fee_pct: c.fee_pct || 0, share_pct: c.share_pct || 0,
+    status: c.status || "rencana", notes: c.notes || null,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateChannel(id, c) {
+  const { error } = await supabase.from("initiative_channels").update({
+    name: c.name, kind: c.kind || "marketplace",
+    fee_pct: c.fee_pct || 0, share_pct: c.share_pct || 0,
+    status: c.status || "rencana", notes: c.notes || null,
+  }).eq("id", id);
+  if (error) throw error;
+}
+
+export async function deleteChannel(id) {
+  const { error } = await supabase.from("initiative_channels").delete().eq("id", id);
+  if (error) throw error;
+}
+
+/* ---- Aktivitas pemasaran ---- */
+export async function addMarketing(initiativeId, m) {
+  const { data, error } = await supabase.from("initiative_marketing").insert({
+    initiative_id: initiativeId,
+    channel: m.channel, kind: m.kind || "sosmed",
+    plan: m.plan || null, budget_month: m.budget_month || 0,
+    target: m.target || null, status: m.status || "rencana",
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateMarketing(id, m) {
+  const { error } = await supabase.from("initiative_marketing").update({
+    channel: m.channel, kind: m.kind || "sosmed",
+    plan: m.plan || null, budget_month: m.budget_month || 0,
+    target: m.target || null, status: m.status || "rencana",
+  }).eq("id", id);
+  if (error) throw error;
+}
+
+export async function deleteMarketing(id) {
+  const { error } = await supabase.from("initiative_marketing").delete().eq("id", id);
+  if (error) throw error;
 }
 
 // ---- Auth ----
