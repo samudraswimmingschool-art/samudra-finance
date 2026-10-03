@@ -5,7 +5,8 @@ import {
   Search, LogOut, RefreshCw, Wallet, ArrowDownCircle, ArrowUpCircle,
   PiggyBank, ShoppingCart, ChevronLeft, Pencil, BarChart3, X,
   TrendingDown, Lightbulb, Printer, ChevronDown, ChevronUp, Banknote,
-  Target as TargetIcon, FileText, Package, Flag, Clock, UserPlus, Menu, Copy
+  Target as TargetIcon, FileText, Package, Flag, Clock, UserPlus, Menu, Copy,
+  Rocket, Link2
 } from "lucide-react";
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -26,6 +27,8 @@ import {
   getDeferredSummary, addDeferredRevenue, deleteDeferredRevenue,
   getDeferredSchedule, recognizeDeferredMonth, recognizeAllDue,
   rpcPnl, rpcBalanceSheet, rpcRetainedProfit, rpcCashFlow, rpcAccountBalances,
+  getInitiatives, addInitiative, updateInitiative, setInitiativeStatus,
+  deleteInitiative, setInitiativeAccounts, rpcInitiativeActuals, rpcInitiativeMonthly,
   periodRange, signOut,
 } from "./lib/api";
 
@@ -258,6 +261,7 @@ export default function App() {
           {tab==="siswa"     && <PertumbuhanSiswa key={yearTick} orgId={orgId} accounts={accounts} />}
           {tab==="owner"     && <OwnerReport key={yearTick} orgId={orgId} orgName={orgName} accounts={accounts} />}
           {tab==="target"    && <TargetView key={yearTick} orgId={orgId} accounts={accounts} />}
+          {tab==="kembang"   && <Pengembangan key={yearTick} orgId={orgId} accounts={accounts} />}
           {tab==="ledger"    && <Ledger balances={balances} />}
           {tab==="trial"     && <Trial balances={balances} />}
           {tab==="pnl"       && <PnL pnl={pnl} pnlPrev={pnlPrev} period={period} accounts={accounts} />}
@@ -283,6 +287,7 @@ const NAV = [
   { sec:"LAPORAN" },
   { id:"owner", label:"Laporan Owner", icon:FileText },
   { id:"target", label:"Target", icon:TargetIcon },
+  { id:"kembang", label:"Pengembangan Usaha", icon:Rocket },
   { id:"analisis", label:"Analisis Keuangan", icon:BarChart3 },
   { id:"siswa", label:"Pertumbuhan Siswa", icon:UserPlus },
   { id:"ledger", label:"Buku Besar", icon:Layers },
@@ -2823,6 +2828,648 @@ const Cell2 = ({ l, v, bold }) => (
     <div className="mono" style={{ fontSize:13.5, fontWeight:bold?700:600, color:bold?C.ink:C.sub }}>{v}</div>
   </div>
 );
+
+// ============================================================
+// PENGEMBANGAN USAHA — rencana, pendanaan, proyeksi, realisasi
+// ============================================================
+const KATEGORI_INISIATIF = ["Produk Baru","Cabang Baru","Peralatan","Layanan","Lainnya"];
+const STATUS_INISIATIF = {
+  ide:     { label:"Ide",     tone:C.sub,   urut:1, jelas:"Baru gagasan, belum dikaji" },
+  kajian:  { label:"Kajian",  tone:C.brass, urut:2, jelas:"Sedang dihitung kelayakannya" },
+  jalan:   { label:"Berjalan",tone:C.teal,  urut:3, jelas:"Sudah dieksekusi" },
+  selesai: { label:"Selesai", tone:C.pos,   urut:4, jelas:"Tuntas / sudah balik modal" },
+  batal:   { label:"Batal",   tone:C.neg,   urut:5, jelas:"Dihentikan" },
+};
+const SUMBER_DANA = {
+  laba:     "Laba ditahan",
+  owner:    "Setoran modal owner",
+  pinjaman: "Pinjaman bank / pihak ketiga",
+  investor: "Investor",
+  campuran: "Gabungan beberapa sumber",
+};
+
+function Pengembangan({ orgId, accounts }) {
+  const [rows, setRows] = useState([]);
+  const [actuals, setActuals] = useState({});     // {initiative_id: {pendapatan,beban,aset,jml_transaksi}}
+  const [kas, setKas] = useState({ bank:0, kas:0, laba:0 });
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState("");
+  const [editId, setEditId] = useState(null);     // id yang sedang diedit, "baru" = tambah
+  const [buka, setBuka] = useState(null);         // id yang detailnya dibuka
+  const [tautFor, setTautFor] = useState(null);   // id yang sedang diatur tautan akunnya
+  const [tautPilih, setTautPilih] = useState([]);
+
+  const kosong = () => ({
+    name:"", category:"Produk Baru", status:"ide", branch:"", start_date:`${YEAR}-01-01`,
+    description:"", capital_needed:"", funding_secured:"", funding_source:"laba",
+    proj_revenue_month:"", proj_cost_month:"",
+  });
+  const [form, setForm] = useState(kosong());
+
+  const reload = async () => {
+    setLoading(true);
+    try {
+      const [s,e] = periodRange(YEAR, "all");
+      const list = await getInitiatives(orgId);
+      setRows(list);
+      const act = await rpcInitiativeActuals(orgId, s, e);
+      const peta = {};
+      act.forEach(a=>{ peta[a.initiative_id] = a; });
+      setActuals(peta);
+      // kas & laba tersedia, untuk menilai kemampuan pendanaan
+      const bal = await rpcAccountBalances(orgId, s, e);
+      const laba = await rpcRetainedProfit(orgId, e);
+      setKas({
+        bank: bal.filter(b=>b.code==="1-10002").reduce((x,b)=>x+Number(b.balance),0),
+        kas:  bal.filter(b=>b.code==="1-10007").reduce((x,b)=>x+Number(b.balance),0),
+        laba: Number(laba)||0,
+      });
+    } catch(err){ setFlash("✗ "+err.message); }
+    setLoading(false);
+  };
+  useEffect(()=>{ if(orgId) reload(); /* eslint-disable-next-line */ }, [orgId]);
+
+  const danaTersedia = kas.bank + kas.kas;
+
+  // ---- hitungan kelayakan satu inisiatif ----
+  const hitung = (r) => {
+    const modal   = Number(r.capital_needed)||0;
+    const siap    = Number(r.funding_secured)||0;
+    const rev     = Number(r.proj_revenue_month)||0;
+    const cost    = Number(r.proj_cost_month)||0;
+    const labaBln = rev - cost;
+    const kurang  = Math.max(0, modal - siap);
+    // titik impas: berapa bulan sampai modal kembali
+    const bep     = labaBln > 0 ? modal / labaBln : null;
+    const roi     = modal > 0 ? (labaBln*12)/modal : null;
+    const margin  = rev > 0 ? labaBln/rev : null;
+    const a       = actuals[r.id] || {};
+    const aRev    = Number(a.pendapatan)||0;
+    const aBeban  = Number(a.beban)||0;
+    const aAset   = Number(a.aset)||0;
+    const aLaba   = aRev - aBeban;
+    const aTrx    = Number(a.jml_transaksi)||0;
+    const modalTerpakai = aAset + (aLaba < 0 ? -aLaba : 0);
+    return { modal, siap, rev, cost, labaBln, kurang, bep, roi, margin,
+             aRev, aBeban, aAset, aLaba, aTrx, modalTerpakai,
+             adaAktual: aTrx > 0 || aRev !== 0 || aBeban !== 0 || aAset !== 0 };
+  };
+
+  // ---- simpan ----
+  const simpan = async () => {
+    if (!form.name.trim()) { setFlash("✗ Nama rencana wajib diisi"); return; }
+    setBusy(true); setFlash("");
+    const payload = {
+      ...form,
+      capital_needed: +form.capital_needed||0,
+      funding_secured: +form.funding_secured||0,
+      proj_revenue_month: +form.proj_revenue_month||0,
+      proj_cost_month: +form.proj_cost_month||0,
+      start_date: form.start_date || null,
+    };
+    try {
+      if (editId && editId!=="baru") { await updateInitiative(editId, payload); setFlash("✓ Rencana diperbarui"); }
+      else { await addInitiative(orgId, payload); setFlash("✓ Rencana ditambahkan"); }
+      setEditId(null); setForm(kosong());
+      await reload();
+    } catch(err){ setFlash("✗ "+err.message); }
+    setBusy(false);
+  };
+
+  const mulaiEdit = (r) => {
+    setEditId(r.id);
+    setForm({
+      name:r.name, category:r.category||"Produk Baru", status:r.status||"ide",
+      branch:r.branch||"", start_date:r.start_date||`${YEAR}-01-01`,
+      description:r.description||"",
+      capital_needed:String(Math.round(Number(r.capital_needed)||0)||""),
+      funding_secured:String(Math.round(Number(r.funding_secured)||0)||""),
+      funding_source:r.funding_source||"laba",
+      proj_revenue_month:String(Math.round(Number(r.proj_revenue_month)||0)||""),
+      proj_cost_month:String(Math.round(Number(r.proj_cost_month)||0)||""),
+    });
+    window.scrollTo({ top:0, behavior:"smooth" });
+  };
+
+  const hapus = async (r) => {
+    if (!confirm(`Hapus rencana "${r.name}"? Jurnal yang sudah tercatat tidak ikut terhapus.`)) return;
+    try { await deleteInitiative(r.id); reload(); } catch(err){ alert(err.message); }
+  };
+
+  const ubahStatus = async (r, status) => {
+    try { await setInitiativeStatus(r.id, status); reload(); } catch(err){ alert(err.message); }
+  };
+
+  // ---- penautan akun ----
+  const bukaTaut = (r) => {
+    setTautFor(r);
+    setTautPilih((r.initiative_accounts||[]).map(x=>x.account_id));
+  };
+  const simpanTaut = async () => {
+    setBusy(true);
+    try {
+      await setInitiativeAccounts(tautFor.id, tautPilih);
+      setFlash(`✓ ${tautPilih.length} akun ditautkan ke "${tautFor.name}"`);
+      setTautFor(null); await reload();
+    } catch(err){ setFlash("✗ "+err.message); }
+    setBusy(false);
+  };
+
+  const akunBisaTaut = accounts.filter(a=>
+    ["Pendapatan","Other Income","COGS","Beban Op","Beban Kas","Other Expense","Aktiva Tetap"].includes(a.type)
+    && a.is_active!==false);
+
+  // ---- ringkasan portofolio ----
+  const aktif = rows.filter(r=>["kajian","jalan"].includes(r.status));
+  const totalModal = rows.filter(r=>r.status!=="batal")
+    .reduce((s,r)=>s+(Number(r.capital_needed)||0), 0);
+  const totalSiap = rows.filter(r=>r.status!=="batal")
+    .reduce((s,r)=>s+(Number(r.funding_secured)||0), 0);
+  const totalKurang = Math.max(0, totalModal - totalSiap);
+  const proyeksiLabaBln = rows.filter(r=>["kajian","jalan"].includes(r.status))
+    .reduce((s,r)=>s+((Number(r.proj_revenue_month)||0)-(Number(r.proj_cost_month)||0)), 0);
+
+  const urut = [...rows].sort((a,b)=>
+    (STATUS_INISIATIF[a.status]?.urut||9) - (STATUS_INISIATIF[b.status]?.urut||9));
+
+  return (
+    <div className="pop">
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:10 }}>
+        <PageHead eyebrow="Perencanaan" title="Pengembangan Usaha"
+          sub={`Rencana ekspansi, kebutuhan modal, proyeksi kelayakan, & realisasinya · ${YEAR}`} />
+        <div style={{ display:"flex", gap:8, marginTop:4 }}>
+          <button className="btn no-print" onClick={()=>window.print()}
+            style={{ display:"flex", alignItems:"center", gap:6, background:C.deep, color:"#fff",
+              padding:"9px 14px", borderRadius:9, fontSize:12.5, fontWeight:600 }}>
+            <Printer size={14} /> PDF</button>
+          <button className="btn no-print" onClick={()=>{
+              if (editId) { setEditId(null); setForm(kosong()); }
+              else { setEditId("baru"); setForm(kosong()); }
+              setFlash("");
+            }}
+            style={{ display:"flex", alignItems:"center", gap:6, background:editId?C.surf:C.teal,
+              color:editId?C.sub:"#fff", padding:"9px 16px", borderRadius:9, fontSize:13, fontWeight:600 }}>
+            {editId ? <><X size={15}/> Tutup</> : <><Plus size={15}/> Rencana Baru</>}</button>
+        </div>
+      </div>
+
+      {/* ---- Form rencana ---- */}
+      {editId && (
+        <div className="card pop no-print" style={{ padding:20, marginBottom:16,
+          border:`2px solid ${editId==="baru"?C.teal:C.brass}` }}>
+          <div style={{ fontWeight:700, fontSize:14.5, marginBottom:14 }}>
+            {editId==="baru" ? "Rencana Pengembangan Baru" : "Ubah Rencana"}</div>
+
+          <div className="row-stack" style={{ display:"grid", gridTemplateColumns:"2fr 1fr 1fr", gap:12, marginBottom:12 }}>
+            <div><label style={lbl}>Nama Rencana</label>
+              <input placeholder="mis. Lini Merchandise Samudra" value={form.name}
+                onChange={e=>setForm({...form,name:e.target.value})} style={inp} /></div>
+            <div><label style={lbl}>Kategori</label>
+              <select value={form.category} onChange={e=>setForm({...form,category:e.target.value})} style={inp}>
+                {KATEGORI_INISIATIF.map(k=><option key={k} value={k}>{k}</option>)}</select></div>
+            <div><label style={lbl}>Status</label>
+              <select value={form.status} onChange={e=>setForm({...form,status:e.target.value})}
+                style={{ ...inp, fontWeight:600, color:STATUS_INISIATIF[form.status]?.tone }}>
+                {Object.entries(STATUS_INISIATIF).map(([k,v])=>
+                  <option key={k} value={k}>{v.label} — {v.jelas}</option>)}</select></div>
+          </div>
+
+          <div className="row-stack" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:12 }}>
+            <div><label style={lbl}>Target Mulai</label>
+              <input type="date" value={form.start_date||""}
+                onChange={e=>setForm({...form,start_date:e.target.value})} style={inp} /></div>
+            <div><label style={lbl}>Cabang terkait (opsional)</label>
+              <select value={form.branch} onChange={e=>setForm({...form,branch:e.target.value})} style={inp}>
+                <option value="">— (lintas cabang / belum ditentukan)</option>
+                {daftarCabang(accounts).map(c=><option key={c} value={c}>{c}</option>)}</select></div>
+          </div>
+
+          <label style={lbl}>Latar belakang & strategi</label>
+          <textarea rows={4} value={form.description}
+            onChange={e=>setForm({...form,description:e.target.value})}
+            placeholder={"Kenapa rencana ini dijalankan, siapa targetnya, bagaimana cara menjalankannya, dan apa risikonya.\n\nmis. Menjual kaos, kacamata, dan pelampung bermerek Samudra ke siswa aktif. Dijual saat kelas berlangsung dan lewat Instagram. Risiko: stok tidak laku, jadi mulai dari jumlah kecil."}
+            style={{ ...inp, height:"auto", lineHeight:1.6, resize:"vertical", marginBottom:14 }} />
+
+          <div style={{ fontSize:11, fontWeight:700, color:C.brass, letterSpacing:".06em", marginBottom:8 }}>PENDANAAN</div>
+          <div className="row-stack" style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1.2fr", gap:12, marginBottom:14 }}>
+            <div><label style={lbl}>Modal dibutuhkan (Rp)</label>
+              <input className="mono" inputMode="numeric" placeholder="0" value={form.capital_needed}
+                onChange={e=>setForm({...form,capital_needed:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
+            <div><label style={lbl}>Dana sudah tersedia (Rp)</label>
+              <input className="mono" inputMode="numeric" placeholder="0" value={form.funding_secured}
+                onChange={e=>setForm({...form,funding_secured:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
+            <div><label style={lbl}>Sumber dana</label>
+              <select value={form.funding_source} onChange={e=>setForm({...form,funding_source:e.target.value})} style={inp}>
+                {Object.entries(SUMBER_DANA).map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></div>
+          </div>
+
+          <div style={{ fontSize:11, fontWeight:700, color:C.brass, letterSpacing:".06em", marginBottom:8 }}>PROYEKSI BULANAN</div>
+          <div className="row-stack" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:10 }}>
+            <div><label style={lbl}>Perkiraan pendapatan / bulan (Rp)</label>
+              <input className="mono" inputMode="numeric" placeholder="0" value={form.proj_revenue_month}
+                onChange={e=>setForm({...form,proj_revenue_month:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
+            <div><label style={lbl}>Perkiraan biaya / bulan (Rp)</label>
+              <input className="mono" inputMode="numeric" placeholder="0" value={form.proj_cost_month}
+                onChange={e=>setForm({...form,proj_cost_month:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
+          </div>
+
+          {/* pratinjau kelayakan langsung saat mengetik */}
+          {(()=>{
+            const h = hitung({ ...form, id:"__preview__",
+              capital_needed:+form.capital_needed||0, funding_secured:+form.funding_secured||0,
+              proj_revenue_month:+form.proj_revenue_month||0, proj_cost_month:+form.proj_cost_month||0 });
+            if (!h.modal && !h.rev) return null;
+            return (
+              <div style={{ background:C.surf, borderRadius:10, padding:"12px 14px", marginBottom:14, fontSize:12.5 }}>
+                <div style={{ color:C.sub, fontWeight:600, marginBottom:7, fontSize:10.5, letterSpacing:".05em" }}>
+                  PERKIRAAN KELAYAKAN:</div>
+                <div className="grid-2" style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12 }}>
+                  <Cell2 l="Laba / bulan" v={money(h.labaBln)} bold />
+                  <Cell2 l="Balik modal" v={h.bep===null?"—":`${h.bep.toFixed(1)} bulan`} bold />
+                  <Cell2 l="ROI / tahun" v={h.roi===null?"—":pct(h.roi)} bold />
+                  <Cell2 l="Kekurangan dana" v={h.kurang>0?money(h.kurang):"Cukup"} bold />
+                </div>
+                {h.labaBln<=0 && h.rev>0 && (
+                  <div style={{ marginTop:9, color:C.neg, fontSize:12 }}>
+                    Biaya bulanan melebihi pendapatan — rencana ini belum balik modal dengan angka tersebut.
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          <button className="btn" onClick={simpan} disabled={busy||!form.name.trim()}
+            style={{ width:"100%", padding:"12px", borderRadius:10,
+              background:(form.name.trim()&&!busy)?(editId==="baru"?C.teal:C.brass):C.line,
+              color:"#fff", fontWeight:700, fontSize:14.5 }}>
+            {busy?"Menyimpan…":(editId==="baru"?"Simpan Rencana":"Simpan Perubahan")}</button>
+        </div>
+      )}
+      {flash && <div className="pop" style={{ textAlign:"center", marginBottom:14,
+        color:flash.startsWith("✓")?C.pos:C.neg, fontSize:13, fontWeight:600 }}>{flash}</div>}
+
+      {loading && <div className="card" style={{ padding:20, color:C.sub, fontSize:13 }}>Memuat…</div>}
+
+      {!loading && rows.length===0 && !editId && (
+        <div className="card" style={{ padding:32, textAlign:"center" }}>
+          <Rocket size={40} color={C.brass} style={{ marginBottom:12 }} />
+          <div style={{ fontSize:15.5, fontWeight:600, marginBottom:6 }}>Belum ada rencana pengembangan</div>
+          <div style={{ fontSize:13, color:C.sub, lineHeight:1.6, maxWidth:520, margin:"0 auto 18px" }}>
+            Catat rencana ekspansi di sini — lini produk baru, cabang baru, atau pembelian peralatan.
+            Aplikasi menghitung kebutuhan modal, titik balik modal, dan ROI-nya, lalu membandingkan
+            dengan realisasi yang terbaca sendiri dari jurnal.
+          </div>
+          <button className="btn" onClick={()=>{ setEditId("baru"); setForm(kosong()); }}
+            style={{ background:C.teal, color:"#fff", padding:"11px 22px", borderRadius:9, fontWeight:700, fontSize:14 }}>
+            Buat Rencana Pertama</button>
+        </div>
+      )}
+
+      {!loading && rows.length>0 && <>
+        {/* ---- Ringkasan portofolio ---- */}
+        <div className="grid-2" style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom:16 }}>
+          <div className="card" style={{ padding:"16px 17px" }}>
+            <div style={{ fontSize:12.5, color:C.sub }}>Rencana Aktif</div>
+            <div className="mono" style={{ fontSize:19, fontWeight:700, marginTop:6, color:C.teal }}>{aktif.length}</div>
+            <div style={{ fontSize:11, color:C.sub, marginTop:4 }}>dari {rows.length} rencana tercatat</div>
+          </div>
+          <div className="card" style={{ padding:"16px 17px" }}>
+            <div style={{ fontSize:12.5, color:C.sub }}>Total Modal Dibutuhkan</div>
+            <div className="mono" style={{ fontSize:19, fontWeight:700, marginTop:6 }}>{money(totalModal)}</div>
+            <div style={{ fontSize:11, color:C.sub, marginTop:4 }}>tersedia {moneyShort(totalSiap)}</div>
+          </div>
+          <div className="card" style={{ padding:"16px 17px" }}>
+            <div style={{ fontSize:12.5, color:C.sub }}>Kekurangan Dana</div>
+            <div className="mono" style={{ fontSize:19, fontWeight:700, marginTop:6,
+              color: totalKurang===0?C.pos : totalKurang<=danaTersedia?C.brass:C.neg }}>
+              {totalKurang===0?"Tercukupi":money(totalKurang)}</div>
+            <div style={{ fontSize:11, color:C.sub, marginTop:4 }}>
+              kas & bank saat ini {moneyShort(danaTersedia)}</div>
+          </div>
+          <div className="card" style={{ padding:"16px 17px" }}>
+            <div style={{ fontSize:12.5, color:C.sub }}>Proyeksi Tambahan Laba</div>
+            <div className="mono" style={{ fontSize:19, fontWeight:700, marginTop:6,
+              color:proyeksiLabaBln>=0?C.pos:C.neg }}>{money(proyeksiLabaBln)}</div>
+            <div style={{ fontSize:11, color:C.sub, marginTop:4 }}>per bulan, bila semua berjalan</div>
+          </div>
+        </div>
+
+        {/* ---- Penilaian kemampuan pendanaan ---- */}
+        {totalKurang > 0 && (
+          <div className="card" style={{ padding:"14px 18px", marginBottom:16,
+            background: totalKurang<=danaTersedia ? C.teal+"0D" : C.brass+"10",
+            border:`1px solid ${totalKurang<=danaTersedia ? C.teal+"30" : C.brass+"40"}`,
+            fontSize:12.5, color:C.ink, lineHeight:1.6 }}>
+            {totalKurang<=danaTersedia
+              ? <>Kekurangan dana <b>{money(totalKurang)}</b> masih bisa ditutup dari kas & bank yang
+                  ada sekarang (<b>{money(danaTersedia)}</b>). Sisakan dana darurat untuk operasional
+                  rutin sebelum seluruh saldo dipakai untuk ekspansi.</>
+              : <>Kekurangan dana <b>{money(totalKurang)}</b> melebihi kas & bank yang tersedia
+                  (<b>{money(danaTersedia)}</b>). Pertimbangkan menjalankan rencana secara bertahap,
+                  menunda yang ROI-nya paling rendah, atau mencari pendanaan luar.</>}
+          </div>
+        )}
+
+        {/* ---- Daftar rencana ---- */}
+        <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+          {urut.map(r=>{
+            const h = hitung(r);
+            const st = STATUS_INISIATIF[r.status] || STATUS_INISIATIF.ide;
+            const tertaut = (r.initiative_accounts||[]).length;
+            const terbuka = buka===r.id;
+            return (
+              <div key={r.id} className="card" style={{ overflow:"hidden", borderLeft:`4px solid ${st.tone}` }}>
+                {/* kepala kartu */}
+                <div style={{ padding:"14px 18px", display:"flex", alignItems:"flex-start",
+                  gap:12, flexWrap:"wrap" }}>
+                  <div style={{ flex:1, minWidth:200 }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:4 }}>
+                      <span style={{ fontWeight:700, fontSize:15 }}>{r.name}</span>
+                      <span style={{ fontSize:9.5, fontWeight:700, padding:"2px 8px", borderRadius:20,
+                        background:st.tone+"18", color:st.tone, letterSpacing:".04em" }}>
+                        {st.label.toUpperCase()}</span>
+                      <span style={{ fontSize:11, color:C.sub }}>{r.category}</span>
+                      {r.branch && <span style={{ fontSize:9.5, fontWeight:700, padding:"2px 7px",
+                        borderRadius:20, background:C.teal+"15", color:C.teal }}>{r.branch}</span>}
+                    </div>
+                    <div style={{ fontSize:11.5, color:C.sub }}>
+                      {r.start_date ? `Target mulai ${r.start_date}` : "Belum ada target mulai"}
+                      {" · "}{SUMBER_DANA[r.funding_source]||"—"}
+                      {" · "}
+                      {tertaut>0
+                        ? <span style={{ color:C.pos, fontWeight:600 }}>{tertaut} akun tertaut</span>
+                        : <span style={{ color:C.brass, fontWeight:600 }}>belum ada akun tertaut</span>}
+                    </div>
+                  </div>
+                  <div style={{ textAlign:"right" }}>
+                    <div style={{ fontSize:10.5, color:C.sub }}>Modal</div>
+                    <div className="mono" style={{ fontSize:15, fontWeight:700 }}>{money(h.modal)}</div>
+                    <div style={{ fontSize:10.5, color:h.kurang>0?C.brass:C.pos, fontWeight:600, marginTop:2 }}>
+                      {h.kurang>0 ? `kurang ${moneyShort(h.kurang)}` : "dana siap"}</div>
+                  </div>
+                  <div className="no-print" style={{ display:"flex", gap:4, alignItems:"center" }}>
+                    <button className="btn" onClick={()=>setBuka(terbuka?null:r.id)}
+                      title={terbuka?"Tutup rincian":"Lihat rincian"}
+                      style={{ background:"transparent", color:C.sub, display:"grid", placeItems:"center", padding:4 }}>
+                      {terbuka?<ChevronUp size={16}/>:<ChevronDown size={16}/>}</button>
+                    <button className="btn" onClick={()=>bukaTaut(r)} title="Tautkan akun COA"
+                      style={{ background:"transparent", color:tertaut>0?C.pos:C.brass,
+                        display:"grid", placeItems:"center", padding:4 }}><Link2 size={15} /></button>
+                    <button className="btn" onClick={()=>mulaiEdit(r)} title="Ubah"
+                      style={{ background:"transparent", color:C.sub, display:"grid", placeItems:"center", padding:4 }}>
+                      <Pencil size={15} /></button>
+                    <button className="btn" onClick={()=>hapus(r)} title="Hapus"
+                      style={{ background:"transparent", color:C.sub, display:"grid", placeItems:"center", padding:4 }}>
+                      <Trash2 size={15} /></button>
+                  </div>
+                </div>
+
+                {/* angka kunci selalu tampil */}
+                <div className="grid-2" style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)",
+                  gap:1, background:C.line, borderTop:`1px solid ${C.line}` }}>
+                  <KpiMini l="Laba / bulan (proyeksi)" v={money(h.labaBln)}
+                    c={h.labaBln>=0?C.pos:C.neg} />
+                  <KpiMini l="Balik modal" v={h.bep===null?"—":`${h.bep.toFixed(1)} bln`} />
+                  <KpiMini l="ROI / tahun" v={h.roi===null?"—":pct(h.roi)}
+                    c={h.roi!==null&&h.roi>=0.2?C.pos:C.sub} />
+                  <KpiMini l="Laba aktual (tahun ini)"
+                    v={h.adaAktual?money(h.aLaba):"belum ada"}
+                    c={h.adaAktual?(h.aLaba>=0?C.pos:C.neg):C.sub} />
+                </div>
+
+                {/* rincian */}
+                {terbuka && (
+                  <div className="pop" style={{ padding:"16px 18px", borderTop:`1px solid ${C.line}` }}>
+                    {r.description && (
+                      <div style={{ marginBottom:16 }}>
+                        <div style={{ fontSize:10.5, fontWeight:700, color:C.brass,
+                          letterSpacing:".06em", marginBottom:6 }}>LATAR BELAKANG & STRATEGI</div>
+                        <div style={{ fontSize:13, lineHeight:1.7, color:C.ink, whiteSpace:"pre-wrap" }}>
+                          {r.description}</div>
+                      </div>
+                    )}
+
+                    <div className="grid-auto" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
+                      {/* pendanaan */}
+                      <div style={{ border:`1px solid ${C.line}`, borderRadius:11, padding:"14px 16px" }}>
+                        <div style={{ fontWeight:700, fontSize:13, marginBottom:10 }}>Pendanaan</div>
+                        <RowLine l="Modal dibutuhkan" v={h.modal} />
+                        <RowLine l="Dana tersedia" v={h.siap} c={C.pos} />
+                        <div style={{ borderTop:`1px solid ${C.line}`, marginTop:6, paddingTop:8 }}>
+                          <RowLine l="Kekurangan" v={h.kurang} c={h.kurang>0?C.neg:C.pos} bold />
+                        </div>
+                        <div style={{ height:8, borderRadius:99, background:C.surf, overflow:"hidden", marginTop:10 }}>
+                          <div style={{ height:"100%", borderRadius:99, background:h.kurang>0?C.brass:C.pos,
+                            width:`${h.modal>0?Math.min(100,(h.siap/h.modal)*100):0}%` }} /></div>
+                        <div style={{ fontSize:11, color:C.sub, marginTop:6 }}>
+                          Sumber: {SUMBER_DANA[r.funding_source]||"—"}
+                          {h.kurang>0 && <> · {h.kurang<=danaTersedia
+                            ? "kekurangan masih tertutup kas saat ini"
+                            : "kekurangan melebihi kas saat ini"}</>}
+                        </div>
+                      </div>
+
+                      {/* proyeksi vs aktual */}
+                      <div style={{ border:`1px solid ${C.line}`, borderRadius:11, padding:"14px 16px" }}>
+                        <div style={{ fontWeight:700, fontSize:13, marginBottom:10 }}>Proyeksi vs Realisasi</div>
+                        <div style={{ display:"grid", gridTemplateColumns:"1fr 90px 90px",
+                          fontSize:10.5, color:C.sub, fontWeight:600, paddingBottom:6 }}>
+                          <span></span><span style={{ textAlign:"right" }}>PROYEKSI</span>
+                          <span style={{ textAlign:"right" }}>AKTUAL</span></div>
+                        <BandingBaris l="Pendapatan / bln" a={h.rev}
+                          b={h.adaAktual?h.aRev:null} tone={C.pos} />
+                        <BandingBaris l="Biaya / bln" a={h.cost}
+                          b={h.adaAktual?h.aBeban:null} tone={C.neg} />
+                        <div style={{ borderTop:`1px solid ${C.line}`, marginTop:6, paddingTop:6 }}>
+                          <BandingBaris l="Laba" a={h.labaBln}
+                            b={h.adaAktual?h.aLaba:null} bold />
+                        </div>
+                        <div style={{ fontSize:11, color:C.sub, marginTop:9, lineHeight:1.5 }}>
+                          {tertaut===0
+                            ? <>Belum ada akun tertaut, jadi kolom aktual masih kosong. Klik ikon rantai
+                                di kartu ini untuk memilih akun pendapatan & biaya yang terkait.</>
+                            : <>Aktual dihitung dari {tertaut} akun tertaut, akumulasi sepanjang {YEAR}
+                                ({h.aTrx} transaksi). Angka proyeksi bersifat per bulan, jadi bandingkan
+                                dengan memperhatikan sudah berapa bulan rencana ini berjalan.</>}
+                        </div>
+                        {h.aAset>0 && (
+                          <div style={{ fontSize:11.5, color:C.ink, marginTop:8, padding:"7px 10px",
+                            borderRadius:7, background:C.surf }}>
+                            Modal yang sudah dibelanjakan (aset tetap): <b>{money(h.aAset)}</b>
+                            {h.modal>0 && <> dari rencana {money(h.modal)} ({pct(h.aAset/h.modal)})</>}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* penilaian otomatis */}
+                    <div style={{ marginTop:14 }}>
+                      {penilaianInisiatif(h, r, danaTersedia).map((p,i)=>(
+                        <div key={i} style={{ display:"flex", gap:9, alignItems:"flex-start",
+                          padding:"9px 13px", borderRadius:9, marginBottom:7,
+                          background:p.tone+"0D", borderLeft:`3px solid ${p.tone}` }}>
+                          <span style={{ fontSize:12.5, color:C.ink, lineHeight:1.55 }}>{p.m}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* ubah status cepat */}
+                    <div className="no-print" style={{ marginTop:12, display:"flex", gap:6,
+                      alignItems:"center", flexWrap:"wrap" }}>
+                      <span style={{ fontSize:11.5, color:C.sub, marginRight:2 }}>Ubah status:</span>
+                      {Object.entries(STATUS_INISIATIF).map(([k,v])=>(
+                        <button key={k} className="btn" onClick={()=>ubahStatus(r,k)}
+                          disabled={r.status===k}
+                          style={{ padding:"5px 11px", borderRadius:7, fontSize:11.5, fontWeight:600,
+                            background:r.status===k?v.tone:C.surf, color:r.status===k?"#fff":C.sub,
+                            cursor:r.status===k?"default":"pointer" }}>{v.label}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div style={{ fontSize:11.5, color:C.sub, marginTop:14, lineHeight:1.65 }}>
+          <b>Cara kerja realisasi otomatis:</b> tautkan tiap rencana ke akun COA yang terkait
+          (mis. akun Pendapatan Merchandise dan HPP Merchandise). Setelah itu, setiap transaksi yang
+          kamu catat lewat menu Transaksi seperti biasa akan langsung terbaca di kolom aktual —
+          tidak perlu memasukkan datanya dua kali. <b>Balik modal</b> dihitung dari modal dibutuhkan
+          ÷ laba bulanan proyeksi, dan <b>ROI</b> dari laba setahun ÷ modal. Keduanya perkiraan untuk
+          bahan pertimbangan, bukan jaminan hasil.
+        </div>
+      </>}
+
+      {/* ---- Modal penautan akun ---- */}
+      {tautFor && (
+        <div className="no-print" onClick={()=>setTautFor(null)}
+          style={{ position:"fixed", inset:0, background:"rgba(15,42,42,.45)", display:"grid",
+            placeItems:"center", zIndex:50, padding:20 }}>
+          <div onClick={e=>e.stopPropagation()} className="pop"
+            style={{ background:"#fff", borderRadius:14, width:"min(620px,100%)", maxHeight:"82vh",
+              overflow:"auto", boxShadow:"0 20px 60px rgba(0,0,0,.25)" }}>
+            <div style={{ padding:"16px 20px", borderBottom:`1px solid ${C.line}`, position:"sticky",
+              top:0, background:"#fff", display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+              <div>
+                <div style={{ fontWeight:700, fontSize:15 }}>Tautkan Akun</div>
+                <div style={{ fontSize:12.5, color:C.sub }}>{tautFor.name}</div>
+              </div>
+              <button className="btn" onClick={()=>setTautFor(null)}
+                style={{ background:"transparent", color:C.sub }}><X size={18} /></button>
+            </div>
+            <div style={{ padding:"14px 20px", fontSize:12.5, color:C.sub, lineHeight:1.6,
+              background:C.surf, borderBottom:`1px solid ${C.line}` }}>
+              Pilih akun pendapatan, biaya, dan aset yang memang milik rencana ini. Realisasinya
+              akan dihitung dari transaksi ke akun-akun tersebut. Kalau akunnya belum ada, buat dulu
+              di menu <b>Chart of Account</b>.
+            </div>
+            <div style={{ padding:"8px 0" }}>
+              {akunBisaTaut.length===0 && (
+                <div style={{ padding:"18px 20px", fontSize:13, color:C.sub }}>
+                  Tidak ada akun yang bisa ditautkan.</div>
+              )}
+              {akunBisaTaut.map(a=>{
+                const pilih = tautPilih.includes(a.id);
+                return (
+                  <button key={a.id} className="btn"
+                    onClick={()=>setTautPilih(pilih
+                      ? tautPilih.filter(x=>x!==a.id)
+                      : [...tautPilih, a.id])}
+                    style={{ width:"100%", textAlign:"left", display:"flex", alignItems:"center",
+                      gap:10, padding:"9px 20px", borderBottom:`1px solid ${C.line}`,
+                      background: pilih ? C.teal+"0D" : "transparent" }}>
+                    <span style={{ width:18, height:18, borderRadius:5, flexShrink:0,
+                      border:`2px solid ${pilih?C.teal:C.line}`, background:pilih?C.teal:"transparent",
+                      display:"grid", placeItems:"center" }}>
+                      {pilih && <Check size={12} color="#fff" strokeWidth={3} />}</span>
+                    <span className="mono" style={{ fontSize:12, fontWeight:600, color:C.deep, width:78 }}>{a.code}</span>
+                    <span style={{ fontSize:13, flex:1 }}>{a.name}</span>
+                    <span style={{ fontSize:10.5, color:C.sub }}>{a.type}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ padding:"14px 20px", borderTop:`1px solid ${C.line}`, position:"sticky",
+              bottom:0, background:"#fff" }}>
+              <button className="btn" onClick={simpanTaut} disabled={busy}
+                style={{ width:"100%", padding:"11px", borderRadius:9, background:C.teal,
+                  color:"#fff", fontWeight:700, fontSize:14 }}>
+                {busy?"Menyimpan…":`Simpan ${tautPilih.length} Akun Tertaut`}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const KpiMini = ({ l, v, c }) => (
+  <div style={{ background:"#fff", padding:"11px 14px" }}>
+    <div style={{ fontSize:10.5, color:C.sub }}>{l}</div>
+    <div className="mono" style={{ fontSize:14, fontWeight:700, color:c||C.ink, marginTop:3 }}>{v}</div>
+  </div>
+);
+
+const BandingBaris = ({ l, a, b, tone, bold }) => (
+  <div style={{ display:"grid", gridTemplateColumns:"1fr 90px 90px", fontSize:12.5, padding:"4px 0" }}>
+    <span style={{ color:bold?C.ink:C.sub, fontWeight:bold?600:400 }}>{l}</span>
+    <span className="mono" style={{ textAlign:"right", color:C.sub }}>{money(a)}</span>
+    <span className="mono" style={{ textAlign:"right", fontWeight:bold?700:600,
+      color: b===null ? C.line : (tone || (b>=0?C.ink:C.neg)) }}>
+      {b===null ? "–" : money(b)}</span>
+  </div>
+);
+
+// penilaian otomatis satu rencana — dipakai di bagian rincian
+function penilaianInisiatif(h, r, danaTersedia) {
+  const out = [];
+  if (h.modal === 0 && h.rev === 0) {
+    out.push({ tone:C.sub, m:"Angka modal dan proyeksi belum diisi, jadi kelayakannya belum bisa dinilai. Isi lewat tombol ubah." });
+    return out;
+  }
+  if (h.labaBln <= 0 && h.rev > 0)
+    out.push({ tone:C.neg, m:`Dengan proyeksi sekarang, biaya bulanan (${money(h.cost)}) menyamai atau melebihi pendapatan (${money(h.rev)}). Rencana ini tidak akan balik modal — tinjau harga jual, volume, atau struktur biayanya dulu.` });
+  if (h.bep !== null && h.bep > 0) {
+    if (h.bep <= 12)
+      out.push({ tone:C.pos, m:`Perkiraan balik modal ${h.bep.toFixed(1)} bulan — tergolong cepat. ROI tahunan ${pct(h.roi)}.` });
+    else if (h.bep <= 24)
+      out.push({ tone:C.brass, m:`Perkiraan balik modal ${h.bep.toFixed(1)} bulan (sekitar ${(h.bep/12).toFixed(1)} tahun). Masih wajar untuk investasi peralatan atau cabang, tapi pastikan proyeksinya konservatif.` });
+    else
+      out.push({ tone:C.neg, m:`Perkiraan balik modal ${h.bep.toFixed(1)} bulan — cukup lama. Pertimbangkan menurunkan modal awal, menaikkan harga, atau mencari rencana lain yang lebih cepat menghasilkan.` });
+  }
+  if (h.kurang > 0) {
+    if (h.kurang <= danaTersedia)
+      out.push({ tone:C.brass, m:`Masih kurang ${money(h.kurang)}. Kas & bank saat ini ${money(danaTersedia)}, jadi secara angka tertutup — tapi sisakan dana operasional rutin sebelum memakainya.` });
+    else
+      out.push({ tone:C.neg, m:`Kekurangan dana ${money(h.kurang)} melebihi kas & bank yang ada (${money(danaTersedia)}). Perlu pendanaan luar, atau jalankan bertahap dengan modal lebih kecil.` });
+  } else if (h.modal > 0) {
+    out.push({ tone:C.pos, m:"Dana untuk rencana ini sudah tersedia penuh." });
+  }
+  if (h.margin !== null && h.margin > 0 && h.margin < 0.15)
+    out.push({ tone:C.brass, m:`Margin proyeksi hanya ${pct(h.margin)} — tipis, jadi sedikit saja biaya meleset bisa membuat rugi. Beri ruang aman pada perhitungan biayanya.` });
+  if (h.adaAktual && h.rev > 0) {
+    const bulanJalan = r.start_date ? Math.max(1, Math.round(
+      (new Date(`${YEAR}-12-31`) - new Date(r.start_date)) / (1000*60*60*24*30))) : null;
+    if (bulanJalan && bulanJalan > 0) {
+      const harusnya = h.rev * Math.min(bulanJalan, 12);
+      if (harusnya > 0) {
+        const capai = h.aRev / harusnya;
+        if (capai >= 1)
+          out.push({ tone:C.pos, m:`Realisasi pendapatan ${money(h.aRev)} sudah melampaui proyeksi untuk masa berjalan (${pct(capai)} dari perkiraan). Proyeksi berikutnya bisa dinaikkan.` });
+        else if (capai >= 0.6)
+          out.push({ tone:C.brass, m:`Realisasi pendapatan ${money(h.aRev)}, sekitar ${pct(capai)} dari proyeksi untuk masa berjalan. Belum sesuai rencana, tapi masih dalam jangkauan.` });
+        else
+          out.push({ tone:C.neg, m:`Realisasi pendapatan baru ${pct(capai)} dari proyeksi masa berjalan (${money(h.aRev)} dari perkiraan ${money(harusnya)}). Tinjau apakah proyeksinya terlalu optimistis atau eksekusinya yang tersendat.` });
+      }
+    }
+  }
+  if (r.status === "ide")
+    out.push({ tone:C.sub, m:"Status masih Ide. Pindahkan ke Kajian setelah angka modal dan proyeksinya dihitung serius." });
+  return out;
+}
 
 // ============================================================
 // LAPORAN OWNER — ringkasan eksekutif + detail lengkap, siap PDF
