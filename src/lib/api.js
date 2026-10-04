@@ -535,7 +535,8 @@ export async function getInitiatives(orgId) {
       initiative_accounts(id, account_id),
       initiative_products(*),
       initiative_channels(*),
-      initiative_marketing(*)`)
+      initiative_marketing(*),
+      initiative_budget(*)`)
     .eq("org_id", orgId)
     .order("created_at", { ascending: false });
   if (error) throw error;
@@ -715,6 +716,57 @@ export async function updateMarketing(id, m) {
 
 export async function deleteMarketing(id) {
   const { error } = await supabase.from("initiative_marketing").delete().eq("id", id);
+  if (error) throw error;
+}
+
+/* ---- Anggaran: modal awal & biaya bulanan ---- */
+export async function addBudget(initiativeId, b) {
+  const { data, error } = await supabase.from("initiative_budget").insert({
+    initiative_id: initiativeId,
+    kind: b.kind || "awal", category: b.category || "Lainnya",
+    name: b.name, amount: b.amount || 0, notes: b.notes || null,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateBudget(id, b) {
+  const { error } = await supabase.from("initiative_budget").update({
+    kind: b.kind || "awal", category: b.category || "Lainnya",
+    name: b.name, amount: b.amount || 0, notes: b.notes || null,
+  }).eq("id", id);
+  if (error) throw error;
+}
+
+export async function deleteBudget(id) {
+  const { error } = await supabase.from("initiative_budget").delete().eq("id", id);
+  if (error) throw error;
+}
+
+/* ---- Pendanaan: hanya kolom dana tersedia & sumbernya ---- */
+export async function updateInitiativeFunding(id, f) {
+  const { error } = await supabase.from("initiatives").update({
+    funding_secured: f.funding_secured || 0,
+    funding_source: f.funding_source || "laba",
+  }).eq("id", id);
+  if (error) throw error;
+}
+
+/* ---- Pendapatan bulanan di luar produk (mis. cabang / layanan) ---- */
+export async function updateInitiativeRevenue(id, amount) {
+  const { error } = await supabase.from("initiatives")
+    .update({ proj_revenue_month: amount || 0 }).eq("id", id);
+  if (error) throw error;
+}
+
+/* ---- Sinkronkan angka hasil hitungan ke kolom rencana ----
+   Dipanggil otomatis setelah rincian berubah, supaya ringkasan
+   portofolio dan laporan lain memakai angka yang sama. */
+export async function syncInitiativeNumbers(id, n) {
+  const { error } = await supabase.from("initiatives").update({
+    capital_needed: Math.round(n.modal || 0),
+    proj_cost_month: Math.round(n.biayaBln || 0),
+  }).eq("id", id);
   if (error) throw error;
 }
 
