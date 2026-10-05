@@ -33,7 +33,7 @@ import {
   addChannel, updateChannel, deleteChannel,
   addMarketing, updateMarketing, deleteMarketing,
   addBudget, updateBudget, deleteBudget,
-  addSwot, updateSwot, deleteSwot,
+  addSwot, updateSwot, deleteSwot, tabelRincianHilang,
   updateInitiativeFunding, updateInitiativeRevenue, syncInitiativeNumbers,
   periodRange, signOut,
 } from "./lib/api";
@@ -2890,6 +2890,59 @@ const SWOT = {
 };
 const BOBOT = { 1:"Kecil", 2:"Sedang", 3:"Besar" };
 
+/* ============================================================
+   UJI SKENARIO & ARUS KAS
+   Biaya dipisah jadi variabel (ikut volume) dan tetap (jalan terus
+   berapa pun yang terjual) — pemisahan ini yang membuat skenario
+   dan titik impas jadi benar, bukan sekadar mengalikan semuanya.
+   ============================================================ */
+function modelBiaya(n) {
+  // kalau rincian tahap 2–5 ada, biaya bisa dipilah; kalau cuma angka
+  // tersimpan dari rencana lama, anggap seluruhnya tetap (lebih hati-hati)
+  const bisaPilah = n.biayaHitung > 0;
+  const variabel  = bisaPilah ? (n.hppBln + n.feeBln) : 0;
+  const tetap     = bisaPilah ? (n.markBln + n.opsBln) : n.biayaBln;
+  const kontribusi = n.omzetBln - variabel;              // margin kontribusi per bulan
+  const rasioKontrib = n.omzetBln > 0 ? kontribusi/n.omzetBln : null;
+  // titik impas: berapa bagian dari target bulanan yang harus tercapai
+  const impasFaktor = kontribusi > 0 ? tetap/kontribusi : null;
+  return { bisaPilah, variabel, tetap, kontribusi, rasioKontrib, impasFaktor };
+}
+
+// hitung ulang seluruh angka pada satu tingkat pencapaian target
+function skenario(n, faktor) {
+  const m = modelBiaya(n);
+  const omzet = n.omzetBln * faktor;
+  const biaya = m.variabel * faktor + m.tetap;
+  const laba  = omzet - biaya;
+  return {
+    faktor, omzet, biaya, laba,
+    margin: omzet > 0 ? laba/omzet : null,
+    bep:    laba > 0 && n.modal > 0 ? n.modal/laba : null,
+    roi:    n.modal > 0 ? (laba*12)/n.modal : null,
+  };
+}
+
+// proyeksi kas 13 titik: bulan 0 (modal keluar) + 12 bulan berjalan
+function arusKas(n, faktor, rampBulan) {
+  const m = modelBiaya(n);
+  const baris = [];
+  let saldo = n.siap - n.modal;
+  baris.push({ bulan:0, masuk:0, keluar:n.modal, bersih:-n.modal, saldo });
+  for (let b = 1; b <= 12; b++) {
+    const ramp = rampBulan > 1 ? Math.min(1, b/rampBulan) : 1;
+    const f = faktor * ramp;
+    const masuk  = n.omzetBln * f;
+    const keluar = m.variabel * f + m.tetap;
+    const bersih = masuk - keluar;
+    saldo += bersih;
+    baris.push({ bulan:b, masuk, keluar, bersih, saldo, ramp });
+  }
+  const titikTerendah = baris.reduce((a,b)=> b.saldo < a.saldo ? b : a, baris[0]);
+  const pulih = baris.find(b=>b.bulan>0 && b.saldo >= 0);
+  return { baris, titikTerendah, pulih };
+}
+
 /* ---- posisi strategis dari hasil SWOT (kuadran baku) ---- */
 function posisiSwot(swot) {
   const skor = (k) => (swot||[]).filter(s=>s.kind===k)
@@ -2988,6 +3041,7 @@ function Pengembangan({ orgId, accounts }) {
   const [tab, setTab] = useState("strategi");
   const [tautFor, setTautFor] = useState(null);
   const [tautPilih, setTautPilih] = useState([]);
+  const [tabelHilang, setTabelHilang] = useState([]);
 
   // form rencana: hanya identitas & strategi — angka datang dari tahap berikutnya
   const kosong = () => ({
@@ -3001,6 +3055,7 @@ function Pengembangan({ orgId, accounts }) {
     try {
       const [s,e] = periodRange(YEAR, "all");
       const list = await getInitiatives(orgId);
+      setTabelHilang(tabelRincianHilang());
       setRows(list);
       const act = await rpcInitiativeActuals(orgId, s, e);
       const peta = {};
@@ -3190,6 +3245,22 @@ function Pengembangan({ orgId, accounts }) {
       )}
       {flash && <div className="pop" style={{ textAlign:"center", marginBottom:14,
         color:flash.startsWith("✓")?C.pos:C.neg, fontSize:13, fontWeight:600 }}>{flash}</div>}
+
+      {/* sebagian tabel rincian belum dibuat di Supabase */}
+      {tabelHilang.length>0 && (
+        <div className="card" style={{ padding:"14px 18px", marginBottom:16,
+          background:C.brass+"10", border:`1px solid ${C.brass}40`,
+          fontSize:12.5, color:C.ink, lineHeight:1.65 }}>
+          <b style={{ color:C.brass }}>Sebagian tahap belum aktif.</b> Tabel berikut belum dibuat di
+          Supabase: <b>{tabelHilang.join(", ")}</b>. Rencana dan tahap lain tetap berjalan normal —
+          data lama tidak hilang. Jalankan file SQL yang sesuai, lalu buka ulang menu ini:
+          <span style={{ display:"block", marginTop:6, color:C.sub }}>
+            {tabelHilang.includes("initiative_products") && <>initiative_products / channels / marketing → <b>pengembangan_rincian.sql</b> · </>}
+            {tabelHilang.includes("initiative_budget") && <>initiative_budget → <b>pengembangan_anggaran.sql</b> · </>}
+            {tabelHilang.includes("initiative_swot") && <>initiative_swot → <b>pengembangan_swot.sql</b></>}
+          </span>
+        </div>
+      )}
 
       {loading && <div className="card" style={{ padding:20, color:C.sub, fontSize:13 }}>Memuat…</div>}
 
@@ -4354,6 +4425,13 @@ function TabAnggaran({ r, n, onChange, busy, setBusy, setFlash }) {
 function TabKelayakan({ r, n, rel, danaTersedia, tertaut, ubahStatus, onChange, busy, setBusy, setFlash }) {
   const [dana, setDana] = useState(String(Math.round(Number(r.funding_secured)||0)||""));
   const [sumber, setSumber] = useState(r.funding_source||"laba");
+  const [faktor, setFaktor] = useState(1);        // skenario untuk arus kas
+  const [ramp, setRamp] = useState(3);            // bulan sampai target penuh
+
+  const mb = modelBiaya(n);
+  const skPes = skenario(n, 0.6), skReal = skenario(n, 1), skOpt = skenario(n, 1.3);
+  const kas12 = arusKas(n, faktor, ramp);
+  const totalQty = n.produk.reduce((s,p)=>s+(Number(p.qty_month)||0), 0);
 
   const simpanDana = async () => {
     setBusy(true); setFlash("");
@@ -4400,6 +4478,217 @@ function TabKelayakan({ r, n, rel, danaTersedia, tertaut, ubahStatus, onChange, 
             {n.roi===null?"—":pct(n.roi)}</div>
         </div>
       </div>
+
+      {/* ---------- Titik impas ---------- */}
+      {n.omzetBln > 0 && (
+        <div style={{ border:`1px solid ${C.line}`, borderRadius:11, padding:"14px 16px", marginBottom:16 }}>
+          <div style={{ fontWeight:700, fontSize:13, marginBottom:10 }}>Titik Impas</div>
+          {mb.impasFaktor === null ? (
+            <div style={{ fontSize:12.5, color:C.neg, lineHeight:1.6 }}>
+              Setiap unit yang terjual belum menutup biaya variabelnya sendiri — berapa pun
+              jumlah yang terjual, rencana ini tetap rugi. Naikkan harga jual atau tekan harga
+              produksi dulu sebelum lanjut.
+            </div>
+          ) : (
+            <>
+              <div className="grid-2" style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:12 }}>
+                <Cell2 l="Perlu tercapai" v={pct(mb.impasFaktor)} bold />
+                <Cell2 l="Setara omzet" v={money(n.omzetBln*mb.impasFaktor)} bold />
+                <Cell2 l={totalQty>0?"Setara unit terjual":"Margin kontribusi"}
+                  v={totalQty>0
+                      ? `${Math.ceil(totalQty*mb.impasFaktor)} dari ${totalQty} unit`
+                      : (mb.rasioKontrib===null?"—":pct(mb.rasioKontrib))} bold />
+              </div>
+              <div style={{ fontSize:12, color:C.sub, marginTop:10, lineHeight:1.6 }}>
+                {mb.impasFaktor <= 0.5
+                  ? <>Cukup <b>{pct(mb.impasFaktor)}</b> dari target bulanan untuk menutup biaya tetap
+                      ({money(mb.tetap)}). Ruang amannya lebar — meleset separuh pun masih untung.</>
+                  : mb.impasFaktor <= 0.85
+                    ? <>Perlu <b>{pct(mb.impasFaktor)}</b> dari target bulanan untuk impas. Masih wajar,
+                        tapi tidak banyak ruang meleset — pantau penjualan bulanan sejak awal.</>
+                    : mb.impasFaktor < 1
+                      ? <>Perlu <b>{pct(mb.impasFaktor)}</b> dari target untuk sekadar impas. Nyaris tanpa
+                          ruang aman: sedikit saja target tidak tercapai, rencana ini rugi.</>
+                      : <>Butuh <b>{pct(mb.impasFaktor)}</b> dari target — di atas target itu sendiri.
+                          Dengan struktur biaya sekarang rencana ini rugi bahkan bila target tercapai penuh.</>}
+                {mb.bisaPilah && <> Biaya tetapnya {money(mb.tetap)}/bulan, biaya variabelnya {money(mb.variabel)} pada target penuh.</>}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ---------- Uji skenario ---------- */}
+      {n.omzetBln > 0 && (
+        <div style={{ border:`1px solid ${C.line}`, borderRadius:11, overflow:"hidden", marginBottom:16 }}>
+          <div style={{ padding:"12px 16px", borderBottom:`1px solid ${C.line}` }}>
+            <div style={{ fontWeight:700, fontSize:13 }}>Uji Skenario</div>
+            <div style={{ fontSize:12, color:C.sub, marginTop:3, lineHeight:1.55 }}>
+              Semua angka di tahap sebelumnya adalah perkiraan. Tabel ini menunjukkan apa yang
+              terjadi bila penjualan meleset — biaya tetap tidak ikut turun, jadi dampaknya
+              lebih besar daripada sekadar proporsional.
+            </div>
+          </div>
+          <div className="scroll-x">
+            <div style={{ display:"grid", gridTemplateColumns:"1.2fr 1fr 1fr 1fr",
+              padding:"9px 16px", background:C.deep, color:"#DDECEC", fontSize:10.5, fontWeight:600 }}>
+              <span></span>
+              <span style={{ textAlign:"right" }}>PESIMIS · 60%</span>
+              <span style={{ textAlign:"right" }}>REALISTIS · 100%</span>
+              <span style={{ textAlign:"right" }}>OPTIMIS · 130%</span>
+            </div>
+            {[
+              { l:"Omzet / bulan", k:"omzet", uang:true },
+              { l:"Biaya / bulan", k:"biaya", uang:true },
+              { l:"Laba / bulan", k:"laba", uang:true, tebal:true },
+              { l:"Margin", k:"margin", persen:true },
+              { l:"Balik modal", k:"bep", bulan:true },
+              { l:"ROI / tahun", k:"roi", persen:true },
+            ].map(baris=>(
+              <div key={baris.k} style={{ display:"grid", gridTemplateColumns:"1.2fr 1fr 1fr 1fr",
+                padding:baris.tebal?"11px 16px":"8px 16px", borderBottom:`1px solid ${C.line}`,
+                fontSize:12.5, alignItems:"center",
+                background:baris.tebal?C.surf:"transparent", fontWeight:baris.tebal?700:400 }}>
+                <span style={{ color:baris.tebal?C.ink:C.sub }}>{baris.l}</span>
+                {[skPes, skReal, skOpt].map((sk,i)=>{
+                  const v = sk[baris.k];
+                  const teks = v===null||v===undefined ? "—"
+                    : baris.uang ? money(v)
+                    : baris.persen ? pct(v)
+                    : baris.bulan ? `${v.toFixed(1)} bln` : String(v);
+                  const warna = baris.k==="laba" ? (v>=0?C.pos:C.neg)
+                    : baris.k==="bep" ? (v===null?C.neg:C.ink) : C.ink;
+                  return <span key={i} className="mono"
+                    style={{ textAlign:"right", color:warna,
+                      fontWeight: i===1 ? 700 : (baris.tebal?700:600) }}>{teks}</span>;
+                })}
+              </div>
+            ))}
+          </div>
+          <div style={{ padding:"12px 16px", fontSize:12.5, color:C.ink, lineHeight:1.65 }}>
+            {skPes.laba >= 0
+              ? <>Pada skenario pesimis pun rencana ini masih untung {money(skPes.laba)} per bulan,
+                  dengan balik modal {skPes.bep===null?"—":`${skPes.bep.toFixed(1)} bulan`}.
+                  Ini rencana yang tahan meleset.</>
+              : <>Pada skenario pesimis rencana ini <b style={{ color:C.neg }}>rugi {money(Math.abs(skPes.laba))}
+                  per bulan</b>. Artinya kalau penjualan hanya tercapai 60%, kamu menombok tiap bulan —
+                  pertimbangkan menekan biaya tetap, memperkecil skala awal, atau menunda sampai
+                  permintaannya lebih pasti.</>}
+          </div>
+        </div>
+      )}
+
+      {/* ---------- Proyeksi arus kas ---------- */}
+      {(n.modal > 0 || n.omzetBln > 0) && (
+        <div style={{ border:`1px solid ${C.line}`, borderRadius:11, overflow:"hidden", marginBottom:16 }}>
+          <div style={{ padding:"12px 16px", borderBottom:`1px solid ${C.line}` }}>
+            <div style={{ fontWeight:700, fontSize:13 }}>Proyeksi Arus Kas 12 Bulan</div>
+            <div style={{ fontSize:12, color:C.sub, marginTop:3, lineHeight:1.55 }}>
+              Balik modal menganggap laba mengalir rata sejak hari pertama. Kenyataannya modal
+              keluar lebih dulu dan penjualan naik bertahap — di sinilah terlihat kapan kas
+              paling tipis.
+            </div>
+          </div>
+
+          <div className="no-print" style={{ display:"flex", gap:16, flexWrap:"wrap",
+            padding:"12px 16px", background:C.surf, borderBottom:`1px solid ${C.line}` }}>
+            <div>
+              <div style={{ fontSize:10.5, color:C.sub, marginBottom:5 }}>SKENARIO</div>
+              <div style={{ display:"flex", gap:4 }}>
+                {[{f:0.6,l:"Pesimis"},{f:1,l:"Realistis"},{f:1.3,l:"Optimis"}].map(o=>(
+                  <button key={o.f} className="btn" onClick={()=>setFaktor(o.f)}
+                    style={{ padding:"6px 12px", borderRadius:7, fontSize:11.5, fontWeight:600,
+                      background:faktor===o.f?C.teal:"#fff", color:faktor===o.f?"#fff":C.sub,
+                      border:`1px solid ${faktor===o.f?C.teal:C.line}` }}>{o.l}</button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize:10.5, color:C.sub, marginBottom:5 }}>TARGET PENUH TERCAPAI DALAM</div>
+              <div style={{ display:"flex", gap:4 }}>
+                {[1,3,6].map(b=>(
+                  <button key={b} className="btn" onClick={()=>setRamp(b)}
+                    style={{ padding:"6px 12px", borderRadius:7, fontSize:11.5, fontWeight:600,
+                      background:ramp===b?C.brass:"#fff", color:ramp===b?"#fff":C.sub,
+                      border:`1px solid ${ramp===b?C.brass:C.line}` }}>
+                    {b===1?"Langsung":`${b} bulan`}</button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ padding:"14px 16px 6px" }}>
+            <ResponsiveContainer width="100%" height={200}>
+              <AreaChart data={kas12.baris.map(b=>({
+                  m: b.bulan===0?"Mulai":`B${b.bulan}`, saldo: Math.round(b.saldo) }))}
+                margin={{ left:-18, right:6, top:6 }}>
+                <defs>
+                  <linearGradient id={`kasg-${r.id}`} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={C.teal} stopOpacity={.3}/>
+                    <stop offset="100%" stopColor={C.teal} stopOpacity={0}/></linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
+                <XAxis dataKey="m" tick={{ fontSize:11, fill:C.sub }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize:10.5, fill:C.sub }} tickFormatter={moneyShort}
+                  axisLine={false} tickLine={false} width={54} />
+                <Tooltip formatter={(v)=>money(v)}
+                  contentStyle={{ borderRadius:10, border:`1px solid ${C.line}`, fontSize:12 }} />
+                <Area type="monotone" dataKey="saldo" stroke={C.teal} strokeWidth={2.4}
+                  fill={`url(#kasg-${r.id})`} name="Saldo kas" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="scroll-x" style={{ borderTop:`1px solid ${C.line}` }}>
+            <div style={{ display:"grid", gridTemplateColumns:"70px 1fr 1fr 1fr 1fr",
+              padding:"9px 16px", background:C.deep, color:"#DDECEC", fontSize:10.5, fontWeight:600 }}>
+              <span>BULAN</span>
+              <span style={{ textAlign:"right" }}>KAS MASUK</span>
+              <span style={{ textAlign:"right" }}>KAS KELUAR</span>
+              <span style={{ textAlign:"right" }}>BERSIH</span>
+              <span style={{ textAlign:"right" }}>SALDO</span>
+            </div>
+            {kas12.baris.map(b=>{
+              const terendah = b.bulan===kas12.titikTerendah.bulan;
+              return (
+                <div key={b.bulan} style={{ display:"grid", gridTemplateColumns:"70px 1fr 1fr 1fr 1fr",
+                  padding:"8px 16px", borderBottom:`1px solid ${C.line}`, fontSize:12, alignItems:"center",
+                  background: terendah ? C.brass+"10" : "transparent" }}>
+                  <span style={{ fontWeight:600, color:C.deep }}>
+                    {b.bulan===0?"Mulai":b.bulan}
+                    {b.ramp!==undefined && b.ramp<1 &&
+                      <span style={{ fontSize:9.5, color:C.sub, fontWeight:400 }}> {pct(b.ramp)}</span>}
+                  </span>
+                  <span className="mono" style={{ textAlign:"right", color:b.masuk?C.pos:C.line }}>
+                    {b.masuk?money(b.masuk):"–"}</span>
+                  <span className="mono" style={{ textAlign:"right", color:b.keluar?C.neg:C.line }}>
+                    {b.keluar?money(b.keluar):"–"}</span>
+                  <span className="mono" style={{ textAlign:"right",
+                    color:b.bersih>=0?C.ink:C.neg }}>{money(b.bersih)}</span>
+                  <span className="mono" style={{ textAlign:"right", fontWeight:700,
+                    color:b.saldo>=0?C.pos:C.neg }}>{money(b.saldo)}</span>
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={{ padding:"13px 16px", fontSize:12.5, color:C.ink, lineHeight:1.65 }}>
+            Titik kas terendah di <b>{kas12.titikTerendah.bulan===0?"saat modal dikeluarkan":`bulan ${kas12.titikTerendah.bulan}`}</b>,
+            yaitu <b style={{ color:kas12.titikTerendah.saldo>=0?C.pos:C.neg }}>
+              {money(kas12.titikTerendah.saldo)}</b>.
+            {kas12.titikTerendah.saldo < 0 && <>
+              {" "}Kekurangan sebesar {money(Math.abs(kas12.titikTerendah.saldo))} itu harus ditutup dari
+              kas usaha yang berjalan{danaTersedia>0 && <> (saat ini {money(danaTersedia)})</>} —
+              {Math.abs(kas12.titikTerendah.saldo) <= danaTersedia
+                ? " secara angka masih tertutup, tapi pastikan operasional rutin tidak ikut tersedot."
+                : " dan ini melebihi kas yang ada sekarang. Perkecil modal awal atau cari pendanaan tambahan."}
+            </>}
+            {kas12.pulih
+              ? <> Kas kembali positif di bulan <b>{kas12.pulih.bulan}</b>.</>
+              : <> Kas belum kembali positif sampai bulan 12 dengan skenario ini.</>}
+          </div>
+        </div>
+      )}
 
       <div className="grid-auto" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
         {/* pendanaan */}
