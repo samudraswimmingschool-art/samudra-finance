@@ -33,6 +33,7 @@ import {
   addChannel, updateChannel, deleteChannel,
   addMarketing, updateMarketing, deleteMarketing,
   addBudget, updateBudget, deleteBudget,
+  addSwot, updateSwot, deleteSwot,
   updateInitiativeFunding, updateInitiativeRevenue, syncInitiativeNumbers,
   periodRange, signOut,
 } from "./lib/api";
@@ -2873,6 +2874,47 @@ const KATEGORI_MODAL = ["Peralatan","Desain & Branding","Foto & Konten","Perizin
   "Sewa & Deposit","Renovasi","Pelatihan","Lainnya"];
 const KATEGORI_BULANAN = ["Sewa","Gaji & Honor","Utilitas","Langganan Aplikasi",
   "Transport & Kirim","Operasional","Lainnya"];
+const SWOT = {
+  strength:    { label:"Kekuatan",  singkat:"S", tone:C.pos,   sisi:"internal",
+                 ket:"Yang sudah dimiliki dan menguntungkan",
+                 contoh:"mis. 600+ siswa aktif jadi pasar siap, merek sudah dikenal di Bandung" },
+  weakness:    { label:"Kelemahan", singkat:"W", tone:C.brass, sisi:"internal",
+                 ket:"Kekurangan di dalam yang menghambat",
+                 contoh:"mis. belum punya tim desain, belum pernah kelola stok barang" },
+  opportunity: { label:"Peluang",   singkat:"O", tone:C.teal,  sisi:"eksternal",
+                 ket:"Keadaan luar yang bisa dimanfaatkan",
+                 contoh:"mis. tren olahraga anak naik, marketplace gratis ongkir" },
+  threat:      { label:"Ancaman",   singkat:"T", tone:C.neg,   sisi:"eksternal",
+                 ket:"Keadaan luar yang bisa merugikan",
+                 contoh:"mis. merchandise serupa dijual lebih murah, harga bahan naik" },
+};
+const BOBOT = { 1:"Kecil", 2:"Sedang", 3:"Besar" };
+
+/* ---- posisi strategis dari hasil SWOT (kuadran baku) ---- */
+function posisiSwot(swot) {
+  const skor = (k) => (swot||[]).filter(s=>s.kind===k)
+    .reduce((t,s)=>t+(Number(s.impact)||2), 0);
+  const S = skor("strength"), W = skor("weakness");
+  const O = skor("opportunity"), T = skor("threat");
+  const internal = S - W, eksternal = O - T;
+  const cukup = (swot||[]).length >= 2;
+  if (!cukup) return { cukup:false, S, W, O, T, internal, eksternal };
+  let nama, tone, saran;
+  if (internal >= 0 && eksternal >= 0) {
+    nama = "Agresif"; tone = C.pos;
+    saran = "Kekuatan dan peluang sama-sama dominan. Ini posisi paling baik untuk maju — perbesar skala, percepat peluncuran, dan pakai kekuatan yang ada untuk merebut peluang sebelum pesaing.";
+  } else if (internal >= 0 && eksternal < 0) {
+    nama = "Diversifikasi"; tone = C.brass;
+    saran = "Kekuatan memadai tapi keadaan luar menekan. Pakai kekuatan yang dimiliki untuk membuka jalur lain — variasi produk, segmen baru, atau kanal yang belum ramai pesaing.";
+  } else if (internal < 0 && eksternal >= 0) {
+    nama = "Perbaikan"; tone = C.teal;
+    saran = "Peluangnya ada, tapi kelemahan internal menghalangi. Benahi dulu yang lemah — kemampuan tim, proses, atau modal — sebelum menambah skala, supaya peluangnya tidak terbuang.";
+  } else {
+    nama = "Bertahan"; tone = C.neg;
+    saran = "Kelemahan dan ancaman sama-sama dominan. Pertimbangkan menunda, memperkecil skala awal, atau menjalankan uji coba kecil dulu sebelum mengeluarkan modal besar.";
+  }
+  return { cukup:true, S, W, O, T, internal, eksternal, nama, tone, saran };
+}
 
 /* ---- hitungan gabungan seluruh tahap ---- */
 function ringkasRencana(r) {
@@ -2880,8 +2922,10 @@ function ringkasRencana(r) {
   const kanal  = r.initiative_channels  || [];
   const mark   = r.initiative_marketing || [];
   const bud    = r.initiative_budget    || [];
+  const swot   = r.initiative_swot      || [];
   const budAwal  = bud.filter(b=>b.kind!=="bulanan");
   const budBulan = bud.filter(b=>b.kind==="bulanan");
+  const posisi   = posisiSwot(swot);
 
   // --- modal awal ---
   const stokAwal      = produk.reduce((s,p)=>s+(Number(p.cost_unit)||0)*(Number(p.qty_initial)||0), 0);
@@ -2916,7 +2960,7 @@ function ringkasRencana(r) {
 
   // kelengkapan tiap tahap, untuk penanda di tab
   const isi = {
-    strategi: !!(r.description && r.description.trim()),
+    strategi: !!(r.description && r.description.trim()) || swot.length > 0,
     produk:   produk.length > 0,
     jual:     kanal.length  > 0,
     pasar:    mark.length   > 0,
@@ -2924,7 +2968,7 @@ function ringkasRencana(r) {
   };
   const lengkap = Object.values(isi).filter(Boolean).length;
 
-  return { produk, kanal, mark, bud, budAwal, budBulan,
+  return { produk, kanal, mark, bud, budAwal, budBulan, swot, posisi,
            stokAwal, biayaAwalLain, modalHitung, modal,
            omzetProduk, omzetLain, omzetBln,
            hppBln, feePctEfektif, feeBln, markBln, opsBln, biayaHitung, biayaBln,
@@ -3308,7 +3352,9 @@ function Pengembangan({ orgId, accounts }) {
                     </div>
 
                     <div style={{ padding:"16px 18px" }}>
-                      {tab==="strategi" && <TabStrategi r={r} n={n} mulaiEdit={mulaiEdit} />}
+                      {tab==="strategi" && <TabStrategi r={r} n={n} mulaiEdit={mulaiEdit}
+                                             onChange={reload} busy={busy} setBusy={setBusy}
+                                             setFlash={setFlash} />}
                       {tab==="produk"   && <TabProduk r={r} n={n} onChange={reload} busy={busy}
                                              setBusy={setBusy} setFlash={setFlash} />}
                       {tab==="jual"     && <TabKanal r={r} n={n} onChange={reload} busy={busy}
@@ -3399,22 +3445,100 @@ function Pengembangan({ orgId, accounts }) {
   );
 }
 
-/* ================= Tahap 1: Strategi ================= */
-function TabStrategi({ r, n, mulaiEdit }) {
+/* ================= Tahap 1: Strategi + SWOT ================= */
+function TabStrategi({ r, n, mulaiEdit, onChange, busy, setBusy, setFlash }) {
+  const kosong = (kind) => ({ kind:kind||"strength", text:"", impact:"2", action:"" });
+  const [form, setForm] = useState(kosong());
+  const [edit, setEdit] = useState(null);
+
+  const isi = (s) => {
+    setEdit(s.id);
+    setForm({ kind:s.kind||"strength", text:s.text||"",
+      impact:String(Number(s.impact)||2), action:s.action||"" });
+  };
+
+  const simpan = async () => {
+    if (!form.text.trim()) { setFlash("✗ Isi butir SWOT dulu"); return; }
+    setBusy(true); setFlash("");
+    try {
+      const v = { ...form, impact:+form.impact||2 };
+      if (edit && edit!=="baru") await updateSwot(edit, v);
+      else await addSwot(r.id, v);
+      setFlash("✓ Butir SWOT tersimpan"); setEdit(null); setForm(kosong(form.kind)); await onChange();
+    } catch(err){ setFlash("✗ "+err.message); }
+    setBusy(false);
+  };
+
+  const hapus = async (s) => {
+    if (!confirm("Hapus butir SWOT ini?")) return;
+    try { await deleteSwot(s.id); onChange(); } catch(err){ alert(err.message); }
+  };
+
+  const butir = (kind) => n.swot.filter(s=>s.kind===kind);
+  const pos = n.posisi;
+
+  const Kuadran = ({ kind }) => {
+    const d = SWOT[kind];
+    const daftar = butir(kind);
+    return (
+      <div style={{ border:`1px solid ${C.line}`, borderTop:`3px solid ${d.tone}`,
+        borderRadius:11, overflow:"hidden", display:"flex", flexDirection:"column" }}>
+        <div style={{ padding:"11px 14px", background:d.tone+"0D" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <span style={{ width:21, height:21, borderRadius:6, background:d.tone, color:"#fff",
+              display:"grid", placeItems:"center", fontSize:11, fontWeight:800 }}>{d.singkat}</span>
+            <span style={{ fontWeight:700, fontSize:13.5 }}>{d.label}</span>
+            <span style={{ fontSize:10, color:C.sub, textTransform:"uppercase",
+              letterSpacing:".04em" }}>{d.sisi}</span>
+            <span className="mono" style={{ marginLeft:"auto", fontSize:11.5, color:C.sub }}>
+              {daftar.length}</span>
+          </div>
+          <div style={{ fontSize:11, color:C.sub, marginTop:4 }}>{d.ket}</div>
+        </div>
+        <div style={{ flex:1 }}>
+          {daftar.length===0 && (
+            <div style={{ padding:"14px", fontSize:11.5, color:C.sub, fontStyle:"italic",
+              lineHeight:1.5 }}>{d.contoh}</div>
+          )}
+          {daftar.map(s=>(
+            <div key={s.id} style={{ padding:"10px 14px", borderTop:`1px solid ${C.line}` }}>
+              <div style={{ display:"flex", alignItems:"flex-start", gap:8 }}>
+                <span style={{ fontSize:12.5, color:C.ink, lineHeight:1.55, flex:1 }}>{s.text}</span>
+                <span style={{ fontSize:9.5, fontWeight:700, padding:"1px 7px", borderRadius:20,
+                  background:d.tone+"18", color:d.tone, whiteSpace:"nowrap" }}>
+                  {BOBOT[Number(s.impact)||2]}</span>
+                <span className="no-print" style={{ display:"flex", gap:2 }}>
+                  <button className="btn" onClick={()=>isi(s)} title="Ubah"
+                    style={{ background:"transparent", color:C.sub, padding:1 }}><Pencil size={12} /></button>
+                  <button className="btn" onClick={()=>hapus(s)} title="Hapus"
+                    style={{ background:"transparent", color:C.sub, padding:1 }}><Trash2 size={12} /></button>
+                </span>
+              </div>
+              {s.action && (
+                <div style={{ fontSize:11.5, color:C.sub, marginTop:5, paddingLeft:10,
+                  borderLeft:`2px solid ${d.tone}40`, lineHeight:1.5 }}>
+                  <b style={{ color:d.tone }}>Tindak lanjut:</b> {s.action}</div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <>
-      <TahapHead no={1} judul="Strategi" ket="Dasar pengambilan keputusan — apa yang dibangun, untuk siapa, dan apa risikonya." />
+      <TahapHead no={1} judul="Strategi & Analisis SWOT"
+        ket="Dasar pengambilan keputusan — apa yang dibangun, untuk siapa, dan apa risikonya." />
+
       {r.description ? (
         <div style={{ fontSize:13, lineHeight:1.75, color:C.ink, whiteSpace:"pre-wrap",
           border:`1px solid ${C.line}`, borderRadius:11, padding:"14px 16px" }}>
           {r.description}</div>
       ) : (
-        <div style={{ padding:"24px 18px", textAlign:"center", border:`1px dashed ${C.line}`,
-          borderRadius:11, color:C.sub, fontSize:13, lineHeight:1.6 }}>
-          Latar belakang dan strategi belum diisi. Tanpa ini, angka di tahap berikutnya kehilangan
-          konteks — kenapa harganya segitu, kenapa jualnya di sana.
-        </div>
+        <Kosong teks="Latar belakang dan strategi belum diisi. Tanpa ini, angka di tahap berikutnya kehilangan konteks — kenapa harganya segitu, kenapa jualnya di sana." />
       )}
+
       <div className="grid-auto" style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)",
         gap:12, marginTop:14 }}>
         <Cell2 l="Kategori" v={r.category||"—"} bold />
@@ -3425,6 +3549,114 @@ function TabStrategi({ r, n, mulaiEdit }) {
         style={{ display:"flex", alignItems:"center", gap:6, marginTop:14, background:C.surf,
           color:C.deep, padding:"9px 15px", borderRadius:8, fontSize:12.5, fontWeight:600 }}>
         <Pencil size={14} /> Ubah strategi</button>
+
+      {/* ---------- SWOT ---------- */}
+      <div style={{ marginTop:22, paddingTop:18, borderTop:`1px solid ${C.line}` }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start",
+          gap:10, flexWrap:"wrap", marginBottom:14 }}>
+          <div style={{ flex:1, minWidth:220 }}>
+            <div style={{ fontWeight:700, fontSize:14 }}>Analisis SWOT</div>
+            <div style={{ fontSize:12.5, color:C.sub, lineHeight:1.55, marginTop:3 }}>
+              Dua baris atas melihat ke dalam usaha, dua baris bawah melihat keadaan di luar.
+              Beri bobot tiap butir — bobot itu yang menentukan posisi strategisnya.
+            </div>
+          </div>
+          <button className="btn no-print" onClick={()=>{ setEdit(edit?null:"baru"); setForm(kosong()); }}
+            style={{ display:"flex", alignItems:"center", gap:6, background:edit?C.surf:C.teal,
+              color:edit?C.sub:"#fff", padding:"8px 14px", borderRadius:8, fontSize:12.5, fontWeight:600 }}>
+            {edit ? <><X size={14}/> Tutup</> : <><Plus size={14}/> Tambah Butir</>}</button>
+        </div>
+
+        {edit && (
+          <div className="pop no-print" style={{ border:`2px solid ${edit==="baru"?C.teal:C.brass}`,
+            borderRadius:11, padding:16, marginBottom:14 }}>
+            <label style={lbl}>Masuk kategori mana</label>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:7, marginBottom:12 }}>
+              {Object.entries(SWOT).map(([k,d])=>{
+                const pilih = form.kind===k;
+                return (
+                  <button key={k} className="btn" onClick={()=>setForm({...form,kind:k})}
+                    style={{ padding:"9px 6px", borderRadius:8, fontSize:11.5, fontWeight:700,
+                      background: pilih ? d.tone : C.surf, color: pilih ? "#fff" : C.sub,
+                      display:"flex", flexDirection:"column", alignItems:"center", gap:3 }}>
+                    <span style={{ fontSize:13, fontWeight:800 }}>{d.singkat}</span>
+                    {d.label}</button>
+                );
+              })}
+            </div>
+
+            <label style={lbl}>Butir {SWOT[form.kind].label.toLowerCase()}</label>
+            <input placeholder={SWOT[form.kind].contoh.replace("mis. ","")} value={form.text}
+              onChange={e=>setForm({...form,text:e.target.value})} style={{ ...inp, marginBottom:10 }} />
+
+            <div className="row-stack" style={{ display:"grid", gridTemplateColumns:"180px 1fr", gap:10, marginBottom:12 }}>
+              <div><label style={lbl}>Bobot pengaruh</label>
+                <select value={form.impact} onChange={e=>setForm({...form,impact:e.target.value})}
+                  style={{ ...inp, fontWeight:600 }}>
+                  <option value="1">Kecil</option>
+                  <option value="2">Sedang</option>
+                  <option value="3">Besar</option></select></div>
+              <div><label style={lbl}>Tindak lanjut (disarankan diisi)</label>
+                <input placeholder={form.kind==="strength" ? "mis. pakai basis siswa untuk pre-order batch pertama"
+                  : form.kind==="weakness" ? "mis. pakai jasa desainer lepas untuk 5 desain awal"
+                  : form.kind==="opportunity" ? "mis. buka toko Shopee sebelum musim liburan"
+                  : "mis. tekankan desain eksklusif per angkatan, bukan adu harga"}
+                  value={form.action} onChange={e=>setForm({...form,action:e.target.value})} style={inp} /></div>
+            </div>
+
+            <button className="btn" onClick={simpan} disabled={busy||!form.text.trim()}
+              style={{ width:"100%", padding:"10px", borderRadius:9,
+                background:(form.text.trim()&&!busy)?(edit==="baru"?C.teal:C.brass):C.line,
+                color:"#fff", fontWeight:700, fontSize:13.5 }}>
+              {busy?"Menyimpan…":(edit==="baru"?"Simpan Butir":"Simpan Perubahan")}</button>
+          </div>
+        )}
+
+        <div className="grid-auto" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+          <Kuadran kind="strength" />
+          <Kuadran kind="weakness" />
+          <Kuadran kind="opportunity" />
+          <Kuadran kind="threat" />
+        </div>
+
+        {/* posisi strategis */}
+        {pos.cukup ? (
+          <div style={{ marginTop:14, border:`1px solid ${pos.tone}40`, borderLeft:`4px solid ${pos.tone}`,
+            borderRadius:11, background:pos.tone+"08", padding:"14px 16px" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:9, flexWrap:"wrap", marginBottom:8 }}>
+              <span style={{ fontSize:12.5, color:C.sub }}>Posisi strategis:</span>
+              <span style={{ fontWeight:800, fontSize:15, color:pos.tone }}>{pos.nama}</span>
+              <span className="mono" style={{ marginLeft:"auto", fontSize:11.5, color:C.sub }}>
+                internal {pos.internal>=0?"+":""}{pos.internal} · eksternal {pos.eksternal>=0?"+":""}{pos.eksternal}
+              </span>
+            </div>
+            <div style={{ fontSize:12.5, color:C.ink, lineHeight:1.65, marginBottom:10 }}>{pos.saran}</div>
+            <div className="grid-2" style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:10 }}>
+              {Object.entries(SWOT).map(([k,d])=>{
+                const skor = k==="strength"?pos.S : k==="weakness"?pos.W
+                  : k==="opportunity"?pos.O : pos.T;
+                return (
+                  <div key={k} style={{ fontSize:11 }}>
+                    <div style={{ color:C.sub }}>{d.label}</div>
+                    <div className="mono" style={{ fontSize:14, fontWeight:700, color:d.tone }}>{skor}</div>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ fontSize:10.5, color:C.sub, marginTop:10, lineHeight:1.5, fontStyle:"italic" }}>
+              Skor = jumlah bobot tiap butir (kecil 1, sedang 2, besar 3). Internal = kekuatan − kelemahan,
+              eksternal = peluang − ancaman. Posisi ini bahan pertimbangan, bukan vonis — yang menentukan
+              tetap penilaianmu atas lapangan.
+            </div>
+          </div>
+        ) : n.swot.length > 0 ? (
+          <div style={{ marginTop:14, padding:"11px 14px", borderRadius:9, background:C.surf,
+            fontSize:12.5, color:C.sub, lineHeight:1.55 }}>
+            Tambahkan minimal dua butir supaya posisi strategisnya bisa dibaca. Idealnya setiap kuadran
+            punya isi, supaya gambarannya tidak berat sebelah.
+          </div>
+        ) : null}
+      </div>
     </>
   );
 }
@@ -4343,6 +4575,18 @@ function penilaianInisiatif(n, r, danaTersedia, rel) {
           out.push({ tone:C.neg, m:`Realisasi pendapatan baru ${pct(capai)} dari proyeksi masa berjalan (${money(rel.aRev)} dari perkiraan ${money(harusnya)}). Tinjau apakah proyeksinya terlalu optimistis atau eksekusinya tersendat.` });
       }
     }
+  }
+  // dari analisis SWOT
+  if (n.posisi && n.posisi.cukup) {
+    const p = n.posisi;
+    out.push({ tone:p.tone, m:`Analisis SWOT menempatkan rencana ini di posisi ${p.nama.toLowerCase()} (internal ${p.internal>=0?"+":""}${p.internal}, eksternal ${p.eksternal>=0?"+":""}${p.eksternal}). ${p.saran}` });
+    if (p.nama === "Bertahan" && n.modal > 0)
+      out.push({ tone:C.neg, m:`Posisi SWOT bertahan tapi modal yang disiapkan ${money(n.modal)}. Pertimbangkan uji coba skala kecil dulu sebelum mengeluarkan seluruh modal itu.` });
+    const tanpaTindak = n.swot.filter(s=>!s.action || !String(s.action).trim()).length;
+    if (tanpaTindak > 0)
+      out.push({ tone:C.sub, m:`${tanpaTindak} butir SWOT belum punya tindak lanjut. Tanpa itu, SWOT berhenti jadi daftar dan tidak membantu keputusan.` });
+  } else if (!n.swot || n.swot.length === 0) {
+    out.push({ tone:C.sub, m:"Analisis SWOT di tahap 1 belum diisi. Mengisi kekuatan, kelemahan, peluang, dan ancaman membantu menilai apakah angka di atas realistis." });
   }
   if (r.status === "ide")
     out.push({ tone:C.sub, m:"Status masih Ide. Pindahkan ke Kajian setelah anggarannya dihitung serius." });

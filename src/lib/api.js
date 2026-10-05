@@ -536,7 +536,8 @@ export async function getInitiatives(orgId) {
       initiative_products(*),
       initiative_channels(*),
       initiative_marketing(*),
-      initiative_budget(*)`)
+      initiative_budget(*),
+      initiative_swot(*)`)
     .eq("org_id", orgId)
     .order("created_at", { ascending: false });
   if (error) throw error;
@@ -740,6 +741,30 @@ export async function updateBudget(id, b) {
 
 export async function deleteBudget(id) {
   const { error } = await supabase.from("initiative_budget").delete().eq("id", id);
+  if (error) throw error;
+}
+
+/* ---- Analisis SWOT ---- */
+export async function addSwot(initiativeId, s) {
+  const { data, error } = await supabase.from("initiative_swot").insert({
+    initiative_id: initiativeId,
+    kind: s.kind || "strength", text: s.text,
+    impact: s.impact || 2, action: s.action || null,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateSwot(id, s) {
+  const { error } = await supabase.from("initiative_swot").update({
+    kind: s.kind || "strength", text: s.text,
+    impact: s.impact || 2, action: s.action || null,
+  }).eq("id", id);
+  if (error) throw error;
+}
+
+export async function deleteSwot(id) {
+  const { error } = await supabase.from("initiative_swot").delete().eq("id", id);
   if (error) throw error;
 }
 
