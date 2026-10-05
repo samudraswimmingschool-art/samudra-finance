@@ -527,21 +527,52 @@ export async function recognizeAllDue(orgId, deferred, asOf, acctByCode, revenue
    pengembangan_usaha.sql di Supabase.
    ============================================================ */
 
-// ---- daftar inisiatif (sekaligus rincian produk, kanal, pemasaran) ----
+// ---- daftar inisiatif (sekaligus seluruh rinciannya) ----
+// Tabel rincian dipasang bertahap lewat beberapa file SQL. Kalau salah satu
+// belum dibuat, query bersarang akan gagal seluruhnya dan menu jadi tampak
+// kosong — padahal datanya aman. Karena itu relasi diambil satu per satu:
+// yang tabelnya belum ada cukup dilewati, sisanya tetap tampil.
+const RELASI_INISIATIF = [
+  "initiative_accounts(id, account_id)",
+  "initiative_products(*)",
+  "initiative_channels(*)",
+  "initiative_marketing(*)",
+  "initiative_budget(*)",
+  "initiative_swot(*)",
+];
+
+// daftar tabel rincian yang ternyata belum dibuat — dibaca UI untuk memberi tahu
+let _relasiHilang = [];
+export function tabelRincianHilang() { return _relasiHilang; }
+
 export async function getInitiatives(orgId) {
-  const { data, error } = await supabase
-    .from("initiatives")
-    .select(`*,
-      initiative_accounts(id, account_id),
-      initiative_products(*),
-      initiative_channels(*),
-      initiative_marketing(*),
-      initiative_budget(*),
-      initiative_swot(*)`)
-    .eq("org_id", orgId)
-    .order("created_at", { ascending: false });
-  if (error) throw error;
-  return data || [];
+  const ambil = async (relasi) => {
+    const kolom = relasi.length ? `*, ${relasi.join(", ")}` : "*";
+    const { data, error } = await supabase
+      .from("initiatives")
+      .select(kolom)
+      .eq("org_id", orgId)
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return data || [];
+  };
+
+  try {
+    const data = await ambil(RELASI_INISIATIF);
+    _relasiHilang = [];
+    return data;
+  } catch (e) {
+    // cari relasi mana yang bermasalah, lalu ambil ulang tanpa relasi tersebut
+    const dipakai = [];
+    for (const rel of RELASI_INISIATIF) {
+      try { await ambil([...dipakai, rel]); dipakai.push(rel); }
+      catch { /* tabel ini belum ada — lewati */ }
+    }
+    _relasiHilang = RELASI_INISIATIF
+      .filter(r => !dipakai.includes(r))
+      .map(r => r.split("(")[0]);
+    return await ambil(dipakai);
+  }
 }
 
 // Tambah inisiatif baru
