@@ -2951,21 +2951,45 @@ function arusKas(n, faktor, rampBulan) {
    batas amannya bukan "sisa margin", melainkan rumus di bawah.
    ============================================================ */
 const JENIS_DISKON = {
-  persen:   { label:"Potongan persen",  satuan:"%",  ket:"mis. diskon 15% dari harga jual" },
-  nominal:  { label:"Potongan rupiah",  satuan:"Rp", ket:"mis. potong Rp 20.000 per unit" },
-  bundling: { label:"Beli N gratis M",  satuan:"",   ket:"mis. beli 2 gratis 1" },
-  ongkir:   { label:"Ongkir ditanggung",satuan:"Rp", ket:"mis. subsidi ongkir Rp 15.000 per paket" },
+  persen:   { label:"Potongan persen",   satuan:"%",  ket:"mis. diskon 15% dari harga jual" },
+  nominal:  { label:"Potongan rupiah",   satuan:"Rp", ket:"mis. potong Rp 20.000 per unit" },
+  bundling: { label:"Beli N gratis M",   satuan:"",   ket:"mis. beli 2 gratis 1 — yang gratis tetap keluar ongkos produksi" },
+  paket:    { label:"Harga paket",       satuan:"Rp", ket:"mis. 2 pcs Rp 130.000 (normal Rp 150.000)" },
+  cashback: { label:"Cashback penjual",  satuan:"Rp", ket:"mis. cashback Rp 10.000 yang ditanggung sendiri, bukan platform" },
+  ongkir:   { label:"Ongkir ditanggung", satuan:"Rp", ket:"mis. subsidi ongkir Rp 15.000 per paket" },
 };
+
+// promo siap pakai untuk disimulasikan terhadap produk yang ada
+const PROMO_UMUM = [
+  { nama:"Beli 1 Gratis 1 (BOGO)", kind:"bundling", min_qty:1, free_qty:1 },
+  { nama:"Beli 2 Gratis 1",        kind:"bundling", min_qty:2, free_qty:1 },
+  { nama:"Beli 3 Gratis 1",        kind:"bundling", min_qty:3, free_qty:1 },
+  { nama:"Beli 4 Gratis 1",        kind:"bundling", min_qty:4, free_qty:1 },
+  { nama:"Diskon 10%",             kind:"persen",   value:10 },
+  { nama:"Diskon 15%",             kind:"persen",   value:15 },
+  { nama:"Diskon 20%",             kind:"persen",   value:20 },
+  { nama:"Diskon 25%",             kind:"persen",   value:25 },
+  { nama:"Diskon 30%",             kind:"persen",   value:30 },
+  { nama:"Diskon 50%",             kind:"persen",   value:50 },
+  { nama:"Gratis ongkir Rp 15.000",kind:"ongkir",   value:15000 },
+  { nama:"Gratis ongkir Rp 25.000",kind:"ongkir",   value:25000 },
+];
 
 // bagian harga yang hilang karena satu skema diskon (0–1)
 function potonganEfektif(d, hargaJual) {
   const v = Number(d.value)||0;
-  if (d.kind === "persen")  return Math.min(1, v/100);
-  if (d.kind === "nominal") return hargaJual > 0 ? Math.min(1, v/hargaJual) : 0;
-  if (d.kind === "ongkir")  return hargaJual > 0 ? Math.min(1, v/hargaJual) : 0;
+  if (d.kind === "persen")   return Math.min(1, v/100);
+  if (d.kind === "nominal")  return hargaJual > 0 ? Math.min(1, v/hargaJual) : 0;
+  if (d.kind === "ongkir")   return hargaJual > 0 ? Math.min(1, v/hargaJual) : 0;
+  if (d.kind === "cashback") return hargaJual > 0 ? Math.min(1, v/hargaJual) : 0;
   if (d.kind === "bundling") {
     const n = Number(d.min_qty)||1, m = Number(d.free_qty)||0;
     return n+m > 0 ? m/(n+m) : 0;   // gratis M dari total N+M unit yang diserahkan
+  }
+  if (d.kind === "paket") {
+    const n = Number(d.min_qty)||1;
+    const normal = hargaJual * n;    // harga wajar bila dibeli satuan
+    return normal > 0 ? Math.max(0, Math.min(1, 1 - v/normal)) : 0;
   }
   return 0;
 }
@@ -4249,45 +4273,179 @@ function BagianDiskon({ r, n, onChange, busy, setBusy, setFlash }) {
               </select>
             </div>
           </div>
-          <div style={{ display:"grid", gridTemplateColumns:"1.5fr 100px 100px 110px 95px 95px",
+          <div style={{ display:"grid", gridTemplateColumns:"1.4fr 95px 90px 90px 110px 80px 110px",
             padding:"9px 14px", background:C.deep, color:"#DDECEC", fontSize:10, fontWeight:600 }}>
             <span>PRODUK</span>
             <span style={{ textAlign:"right" }}>HARGA JUAL</span>
             <span style={{ textAlign:"right" }}>PRODUKSI</span>
-            <span style={{ textAlign:"right" }}>HARGA LANTAI</span>
             <span style={{ textAlign:"center" }}>DISKON AMAN</span>
+            <span style={{ textAlign:"right" }}>HARGA SETELAHNYA</span>
             <span style={{ textAlign:"center" }}>IMPAS</span>
+            <span style={{ textAlign:"right" }}>HARGA LANTAI</span>
           </div>
           {n.produk.map(p=>{
             const P = Number(p.price_unit)||0, Cc = Number(p.cost_unit)||0;
             const b = batasDiskon(P, Cc, n.feePctEfektif, mt);
             const lantai = (1-n.feePctEfektif) > 0 ? Cc/(1-n.feePctEfektif) : 0;
+            const hargaAman = b.aman>0 ? P*(1-b.aman) : null;
             return (
               <div key={p.id} style={{ display:"grid",
-                gridTemplateColumns:"1.5fr 100px 100px 110px 95px 95px",
+                gridTemplateColumns:"1.4fr 95px 90px 90px 110px 80px 110px",
                 padding:"10px 14px", borderBottom:`1px solid ${C.line}`, fontSize:12, alignItems:"center" }}>
                 <span><b style={{ color:C.deep }}>{p.name}</b>
                   {p.variant && <span style={{ color:C.sub }}> · {p.variant}</span>}</span>
                 <span className="mono" style={{ textAlign:"right", fontWeight:600 }}>{money(P)}</span>
                 <span className="mono" style={{ textAlign:"right", color:C.sub }}>{money(Cc)}</span>
-                <span className="mono" style={{ textAlign:"right", color:C.brass, fontWeight:600 }}>
-                  {money(lantai)}</span>
                 <span className="mono" style={{ textAlign:"center", fontWeight:700,
                   color: b.aman>0 ? C.pos : C.neg }}>
                   {b.aman===null||b.aman<=0 ? "—" : pct(b.aman)}</span>
+                <span className="mono" style={{ textAlign:"right", fontWeight:700,
+                  color: hargaAman ? C.pos : C.neg }}>
+                  {hargaAman ? money(hargaAman) : "tak ada ruang"}</span>
                 <span className="mono" style={{ textAlign:"center", fontWeight:600,
                   color: b.impas>0 ? C.brass : C.neg }}>
                   {b.impas===null||b.impas<=0 ? "—" : pct(b.impas)}</span>
+                <span className="mono" style={{ textAlign:"right", color:C.brass, fontWeight:600 }}>
+                  {money(lantai)}</span>
               </div>
             );
           })}
           <div style={{ padding:"11px 14px", fontSize:11.5, color:C.sub, lineHeight:1.6 }}>
-            <b>Harga lantai</b> = harga terendah yang masih menutup produksi setelah dipotong platform —
-            jual di bawah ini pasti rugi. <b>Diskon aman</b> = batas yang masih menyisakan margin {marginTarget}%.
-            <b> Impas</b> = batas sebelum rugi, tanpa sisa margin sama sekali. Pakai kolom diskon aman
-            untuk promo rutin, dan kolom impas hanya untuk cuci gudang.
+            <b>Harga setelahnya</b> = harga jual terendah yang masih menyisakan margin {marginTarget}% —
+            pakai angka ini sebagai patokan promo rutin. <b>Harga lantai</b> = harga saat impas, tidak
+            untung tidak rugi; hanya untuk cuci gudang, dan itu pun belum menutup sewa serta biaya
+            pemasaran bulanan.
           </div>
         </div>
+
+        {/* ---- Simulasi promo siap pakai ---- */}
+        {(()=>{
+          const sim = PROMO_UMUM.map(pr=>{
+            const hasil = n.produk.map(p=>({ p, h:hasilDiskon(p, pr, n.feePctEfektif) }));
+            const rugi  = hasil.filter(x=>x.h.laba < 0);
+            const tipis = hasil.filter(x=>x.h.laba >= 0 && x.h.margin < mt);
+            const status = rugi.length ? { l:"RUGI", t:C.neg }
+              : tipis.length ? { l:"TIPIS", t:C.brass } : { l:"AMAN", t:C.pos };
+            const pot = potonganEfektif(pr, n.produk[0] ? Number(n.produk[0].price_unit)||0 : 0);
+            const labaTerendah = hasil.length
+              ? hasil.reduce((a,x)=> x.h.laba < a.h.laba ? x : a, hasil[0]) : null;
+            return { pr, pot, status, rugi, tipis, labaTerendah, hasil };
+          });
+          const aman = sim.filter(s=>s.status.l==="AMAN");
+          const palingAgresif = aman.length
+            ? aman.reduce((a,s)=> s.pot > a.pot ? s : a, aman[0]) : null;
+          const bogo = sim.find(s=>s.pr.nama.includes("BOGO"));
+
+          return (
+            <div style={{ border:`1px solid ${C.line}`, borderRadius:11, overflow:"hidden", marginBottom:14 }}>
+              <div style={{ padding:"11px 14px", background:C.teal+"0D", borderBottom:`1px solid ${C.line}` }}>
+                <div style={{ fontWeight:700, fontSize:12.5 }}>Simulasi Promo Siap Pakai</div>
+                <div style={{ fontSize:11, color:C.sub, marginTop:2 }}>
+                  Promo yang biasa dipakai, diuji ke seluruh produkmu dengan margin minimum {marginTarget}%
+                </div>
+              </div>
+
+              {palingAgresif ? (
+                <div style={{ padding:"12px 14px", background:C.pos+"0D",
+                  borderBottom:`1px solid ${C.line}`, fontSize:12.5, color:C.ink, lineHeight:1.6 }}>
+                  Promo paling menarik yang masih aman untuk semua produkmu:
+                  <b style={{ color:C.pos }}> {palingAgresif.pr.nama}</b> — setara potongan {pct(palingAgresif.pot)}.
+                  Lebih dari itu, margin {marginTarget}% tidak tercapai.
+                </div>
+              ) : (()=>{
+                const tidakRugi = sim.filter(s=>s.status.l!=="RUGI");
+                const terbaik = tidakRugi.length
+                  ? tidakRugi.reduce((a,s)=> s.pot > a.pot ? s : a, tidakRugi[0]) : null;
+                const marginNormal = n.produk.length
+                  ? Math.min(...n.produk.map(p=>{
+                      const P=Number(p.price_unit)||0, Cc=Number(p.cost_unit)||0;
+                      return P>0 ? (P*(1-n.feePctEfektif)-Cc)/P : 0; })) : 0;
+                return (
+                  <div style={{ padding:"12px 14px", background:C.brass+"0D",
+                    borderBottom:`1px solid ${C.line}`, fontSize:12.5, color:C.ink, lineHeight:1.65 }}>
+                    <b style={{ color:C.brass }}>Tidak ada promo standar yang menyisakan margin {marginTarget}%.</b>
+                    {" "}Penyebabnya bukan promonya, tapi margin normalmu sendiri yang baru
+                    <b> {pct(marginNormal)}</b> — begitu dipotong sedikit saja, sisanya langsung di bawah target.
+                    {terbaik && <> Yang masih tidak rugi dan paling menarik: <b>{terbaik.pr.nama}</b> (setara
+                      {" "}{pct(terbaik.pot)}), meski marginnya tipis.</>}
+                    <div style={{ marginTop:8, paddingLeft:2 }}>
+                      Tiga pilihan: turunkan margin minimum di atas supaya sesuai kenyataan; nego harga
+                      produksi ke vendor dengan pesanan lebih besar; atau naikkan harga jual lebih dulu
+                      sebelum memasang promo. Memaksakan promo dengan margin setipis ini membuat kerja
+                      bertambah tanpa tambahan laba.
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="scroll-x">
+                <div style={{ display:"grid", gridTemplateColumns:"1.5fr 100px 1fr 110px 80px",
+                  padding:"9px 14px", background:C.deep, color:"#DDECEC", fontSize:10, fontWeight:600 }}>
+                  <span>PROMO</span>
+                  <span style={{ textAlign:"center" }}>SETARA</span>
+                  <span style={{ textAlign:"right" }}>HARGA TERENDAH</span>
+                  <span style={{ textAlign:"right" }}>LABA/UNIT TERENDAH</span>
+                  <span style={{ textAlign:"center" }}>STATUS</span>
+                </div>
+                {sim.map((s,i)=>(
+                  <div key={i} style={{ display:"grid", gridTemplateColumns:"1.5fr 100px 1fr 110px 80px",
+                    padding:"8px 14px", borderBottom:`1px solid ${C.line}`, fontSize:12, alignItems:"center",
+                    background: s.status.l==="RUGI" ? C.neg+"06" : "transparent" }}>
+                    <span style={{ color:C.ink }}>{s.pr.nama}</span>
+                    <span className="mono" style={{ textAlign:"center", color:C.sub }}>{pct(s.pot)}</span>
+                    <span className="mono" style={{ textAlign:"right" }}>
+                      {s.labaTerendah ? money(s.labaTerendah.h.hargaBaru) : "—"}</span>
+                    <span className="mono" style={{ textAlign:"right", fontWeight:600,
+                      color: s.labaTerendah && s.labaTerendah.h.laba>=0 ? C.pos : C.neg }}>
+                      {s.labaTerendah ? money(s.labaTerendah.h.laba) : "—"}</span>
+                    <span style={{ textAlign:"center", fontSize:10, fontWeight:700,
+                      color:s.status.t }}>{s.status.l}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* penjelasan strategi bundling */}
+              {bogo && (
+                <div style={{ padding:"13px 14px", fontSize:12.5, color:C.ink, lineHeight:1.7,
+                  borderTop:`1px solid ${C.line}` }}>
+                  <b>Cara membaca promo bundling.</b> Beli 1 gratis 1 berarti kamu menyerahkan 2 unit
+                  tapi dibayar 1 — setara potongan 50%, dan ongkos produksi unit gratisnya tetap keluar.
+                  Beli 2 gratis 1 setara 33%, beli 3 gratis 1 setara 25%, beli 4 gratis 1 setara 20%.
+                  Makin banyak syarat belinya, makin ringan potongannya.
+                  {bogo.status.l === "RUGI" ? (
+                    <div style={{ marginTop:9, padding:"10px 12px", borderRadius:8,
+                      background:C.neg+"0D", borderLeft:`3px solid ${C.neg}` }}>
+                      <b style={{ color:C.neg }}>BOGO rugi untuk produkmu.</b> Marginmu belum cukup lebar
+                      menanggung potongan 50%. Empat jalan keluar, berurutan dari yang paling masuk akal:
+                      <div style={{ marginTop:7, paddingLeft:2 }}>
+                        <div style={{ marginBottom:5 }}><b>1. Naikkan syarat belinya.</b> Ganti jadi
+                          beli 3 gratis 1 atau beli 4 gratis 1 — pembeli tetap merasa dapat gratisan,
+                          tapi potongannya tinggal 25% atau 20%.</div>
+                        <div style={{ marginBottom:5 }}><b>2. Gratiskan barang yang murah, bukan yang sama.</b>
+                          Beli kaos gratis topi, bukan beli kaos gratis kaos. Yang diberikan cukup item
+                          bermodal kecil, sehingga potongan efektifnya jauh lebih ringan.</div>
+                        <div style={{ marginBottom:5 }}><b>3. Perbaiki struktur harganya dulu.</b> Dengan
+                          produksi {money(Number(n.produk[0]?.cost_unit)||0)} dan jual {money(Number(n.produk[0]?.price_unit)||0)},
+                          marginmu memang tipis. Nego harga vendor di jumlah lebih besar, atau naikkan
+                          harga jual sebelum memasang promo agresif.</div>
+                        <div><b>4. Jangan pakai harga coret palsu.</b> Menaikkan harga normal hanya supaya
+                          diskonnya terlihat besar akan ketahuan pembeli yang pernah beli sebelumnya, dan
+                          di marketplace tercatat riwayat harganya.</div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ marginTop:9, padding:"10px 12px", borderRadius:8,
+                      background:C.pos+"0D", borderLeft:`3px solid ${C.pos}` }}>
+                      <b style={{ color:C.pos }}>BOGO masih sanggup kamu jalankan</b> — laba per unit
+                      terendah {money(bogo.labaTerendah?.h.laba||0)}. Tetap batasi periodenya, karena
+                      promo sebesar ini melatih pembeli menunggu diskon berikutnya.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* ---- Form skema ---- */}
         {edit && (
@@ -4319,6 +4477,24 @@ function BagianDiskon({ r, n, onChange, busy, setBusy, setFlash }) {
                     {pct(potonganEfektif({ kind:"bundling", min_qty:+form.min_qty||1,
                       free_qty:+form.free_qty||0 }, 1))}</div></div>
               </div>
+            ) : form.kind==="paket" ? (
+              <div className="row-stack" style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginBottom:10 }}>
+                <div><label style={lbl}>Isi paket (unit)</label>
+                  <input className="mono" inputMode="numeric" placeholder="2" value={form.min_qty}
+                    onChange={e=>setForm({...form,min_qty:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
+                <div><label style={lbl}>Harga paket (Rp)</label>
+                  <input className="mono" inputMode="numeric" placeholder="130000" value={form.value}
+                    onChange={e=>setForm({...form,value:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
+                <div><label style={lbl}>Setara diskon</label>
+                  <div style={{ ...inp, display:"flex", alignItems:"center", fontWeight:700,
+                    color:C.brass, background:C.surf }}>
+                    {(()=>{
+                      const p0 = n.produk.find(p=>p.id===form.product_id) || n.produk[0];
+                      const P = Number(p0?.price_unit)||0;
+                      return P>0 ? pct(potonganEfektif({ kind:"paket", value:+form.value||0,
+                        min_qty:+form.min_qty||1 }, P)) : "—";
+                    })()}</div></div>
+              </div>
             ) : (
               <div className="row-stack" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
                 <div><label style={lbl}>Besaran ({JENIS_DISKON[form.kind].satuan})</label>
@@ -4331,7 +4507,7 @@ function BagianDiskon({ r, n, onChange, busy, setBusy, setFlash }) {
               </div>
             )}
 
-            {form.kind==="bundling" && (
+            {(form.kind==="bundling" || form.kind==="paket") && (
               <div style={{ marginBottom:10 }}>
                 <label style={lbl}>Perkiraan porsi penjualan yang kena promo (%)</label>
                 <input className="mono" inputMode="numeric" placeholder="0" value={form.share_pct}
@@ -4442,7 +4618,9 @@ function BagianDiskon({ r, n, onChange, busy, setBusy, setFlash }) {
                     <span style={{ fontSize:11, color:C.sub }}>
                       {jd.label}
                       {d.kind==="bundling"
-                        ? ` ${Number(d.min_qty)||1}+${Number(d.free_qty)||0} · setara ${pct(potonganEfektif(d,1))}`
+                        ? ` beli ${Number(d.min_qty)||1} gratis ${Number(d.free_qty)||0} · setara ${pct(potonganEfektif(d,1))}`
+                        : d.kind==="paket"
+                        ? ` ${Number(d.min_qty)||1} unit ${money(Number(d.value)||0)}`
                         : d.kind==="persen" ? ` ${Number(d.value)||0}%`
                         : ` ${money(Number(d.value)||0)}`}
                     </span>
