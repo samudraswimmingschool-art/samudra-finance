@@ -539,6 +539,7 @@ const RELASI_INISIATIF = [
   "initiative_marketing(*)",
   "initiative_budget(*)",
   "initiative_swot(*)",
+  "initiative_discounts(*)",
 ];
 
 // daftar tabel rincian yang ternyata belum dibuat — dibaca UI untuk memberi tahu
@@ -796,6 +797,36 @@ export async function updateSwot(id, s) {
 
 export async function deleteSwot(id) {
   const { error } = await supabase.from("initiative_swot").delete().eq("id", id);
+  if (error) throw error;
+}
+
+/* ---- Skema diskon ---- */
+export async function addDiscount(initiativeId, d) {
+  const { data, error } = await supabase.from("initiative_discounts").insert({
+    initiative_id: initiativeId,
+    name: d.name, kind: d.kind || "persen", value: d.value || 0,
+    min_qty: d.min_qty || 1, free_qty: d.free_qty || 0,
+    product_id: d.product_id || null, channel_id: d.channel_id || null,
+    start_date: d.start_date || null, end_date: d.end_date || null,
+    notes: d.notes || null,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateDiscount(id, d) {
+  const { error } = await supabase.from("initiative_discounts").update({
+    name: d.name, kind: d.kind || "persen", value: d.value || 0,
+    min_qty: d.min_qty || 1, free_qty: d.free_qty || 0,
+    product_id: d.product_id || null, channel_id: d.channel_id || null,
+    start_date: d.start_date || null, end_date: d.end_date || null,
+    notes: d.notes || null,
+  }).eq("id", id);
+  if (error) throw error;
+}
+
+export async function deleteDiscount(id) {
+  const { error } = await supabase.from("initiative_discounts").delete().eq("id", id);
   if (error) throw error;
 }
 

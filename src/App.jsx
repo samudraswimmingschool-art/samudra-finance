@@ -34,6 +34,7 @@ import {
   addMarketing, updateMarketing, deleteMarketing,
   addBudget, updateBudget, deleteBudget,
   addSwot, updateSwot, deleteSwot, tabelRincianHilang,
+  addDiscount, updateDiscount, deleteDiscount,
   updateInitiativeFunding, updateInitiativeRevenue, syncInitiativeNumbers,
   periodRange, signOut,
 } from "./lib/api";
@@ -2943,6 +2944,61 @@ function arusKas(n, faktor, rampBulan) {
   return { baris, titikTerendah, pulih };
 }
 
+/* ============================================================
+   SKEMA DISKON
+   Diskon memotong harga jual, tapi HPP tidak ikut turun — dan
+   potongan platform dihitung dari harga SETELAH diskon. Karena itu
+   batas amannya bukan "sisa margin", melainkan rumus di bawah.
+   ============================================================ */
+const JENIS_DISKON = {
+  persen:   { label:"Potongan persen",  satuan:"%",  ket:"mis. diskon 15% dari harga jual" },
+  nominal:  { label:"Potongan rupiah",  satuan:"Rp", ket:"mis. potong Rp 20.000 per unit" },
+  bundling: { label:"Beli N gratis M",  satuan:"",   ket:"mis. beli 2 gratis 1" },
+  ongkir:   { label:"Ongkir ditanggung",satuan:"Rp", ket:"mis. subsidi ongkir Rp 15.000 per paket" },
+};
+
+// bagian harga yang hilang karena satu skema diskon (0–1)
+function potonganEfektif(d, hargaJual) {
+  const v = Number(d.value)||0;
+  if (d.kind === "persen")  return Math.min(1, v/100);
+  if (d.kind === "nominal") return hargaJual > 0 ? Math.min(1, v/hargaJual) : 0;
+  if (d.kind === "ongkir")  return hargaJual > 0 ? Math.min(1, v/hargaJual) : 0;
+  if (d.kind === "bundling") {
+    const n = Number(d.min_qty)||1, m = Number(d.free_qty)||0;
+    return n+m > 0 ? m/(n+m) : 0;   // gratis M dari total N+M unit yang diserahkan
+  }
+  return 0;
+}
+
+// batas diskon maksimum satu produk pada kanal dengan potongan f
+//   impas : harga(1-d)(1-f) = HPP
+//   target: laba per unit >= marginTarget x harga setelah diskon
+function batasDiskon(hargaJual, hpp, f, marginTarget) {
+  const P = Number(hargaJual)||0, C = Number(hpp)||0;
+  if (P <= 0) return { impas:null, aman:null, marginNormal:null };
+  const marginNormal = (P*(1-f) - C) / P;
+  const impas = 1 - C / (P*(1-f));
+  const sisa  = 1 - f - (marginTarget||0);
+  const aman  = sisa > 0 ? 1 - C/(P*sisa) : null;
+  return {
+    impas: impas > 0 ? impas : 0,
+    aman:  aman !== null && aman > 0 ? aman : 0,
+    marginNormal,
+  };
+}
+
+// terapkan satu diskon ke satu produk, hasilkan angka setelah diskon
+function hasilDiskon(produk, d, f) {
+  const P = Number(produk.price_unit)||0, C = Number(produk.cost_unit)||0;
+  const pot = potonganEfektif(d, P);
+  const hargaBaru = P * (1 - pot);
+  const bersih    = hargaBaru * (1 - f);       // setelah potongan platform
+  const laba      = bersih - C;
+  const margin    = hargaBaru > 0 ? laba/hargaBaru : null;
+  const lamaLaba  = P*(1-f) - C;
+  return { pot, hargaBaru, bersih, laba, margin, selisihLaba: laba - lamaLaba };
+}
+
 /* ---- posisi strategis dari hasil SWOT (kuadran baku) ---- */
 function posisiSwot(swot) {
   const skor = (k) => (swot||[]).filter(s=>s.kind===k)
@@ -2976,6 +3032,7 @@ function ringkasRencana(r) {
   const mark   = r.initiative_marketing || [];
   const bud    = r.initiative_budget    || [];
   const swot   = r.initiative_swot      || [];
+  const diskon = r.initiative_discounts || [];
   const budAwal  = bud.filter(b=>b.kind!=="bulanan");
   const budBulan = bud.filter(b=>b.kind==="bulanan");
   const posisi   = posisiSwot(swot);
@@ -3021,7 +3078,7 @@ function ringkasRencana(r) {
   };
   const lengkap = Object.values(isi).filter(Boolean).length;
 
-  return { produk, kanal, mark, bud, budAwal, budBulan, swot, posisi,
+  return { produk, kanal, mark, bud, budAwal, budBulan, swot, posisi, diskon,
            stokAwal, biayaAwalLain, modalHitung, modal,
            omzetProduk, omzetLain, omzetBln,
            hppBln, feePctEfektif, feeBln, markBln, opsBln, biayaHitung, biayaBln,
@@ -4072,7 +4129,397 @@ function TabKanal({ r, n, onChange, busy, setBusy, setFlash }) {
           {n.omzetBln===0 && <>Isi target jual per bulan di tahap 2 untuk melihat perkiraan omzet per kanal.</>}
         </div>
       </>}
+
+      <BagianDiskon r={r} n={n} onChange={onChange} busy={busy}
+        setBusy={setBusy} setFlash={setFlash} />
     </>
+  );
+}
+
+/* ---- Skema diskon, bagian kedua di tahap 3 ---- */
+function BagianDiskon({ r, n, onChange, busy, setBusy, setFlash }) {
+  const kosong = () => ({ name:"", kind:"persen", value:"", min_qty:"2", free_qty:"1",
+    product_id:"", channel_id:"", share_pct:"", period:"", note:"", active:true });
+  const [form, setForm] = useState(kosong());
+  const [edit, setEdit] = useState(null);
+  const [marginTarget, setMarginTarget] = useState(10);   // margin minimum yang ingin dijaga (%)
+
+  const isi = (d) => {
+    setEdit(d.id);
+    setForm({ name:d.name||"", kind:d.kind||"persen",
+      value:String(Math.round(Number(d.value)||0)||""),
+      min_qty:String(Number(d.min_qty)||2), free_qty:String(Number(d.free_qty)||1),
+      product_id:d.product_id||"", channel_id:d.channel_id||"",
+      share_pct:String(Number(d.share_pct)||""), period:d.period||"",
+      note:d.note||"", active:d.active!==false });
+  };
+
+  const simpan = async () => {
+    if (!form.name.trim()) { setFlash("✗ Nama promo wajib diisi"); return; }
+    setBusy(true); setFlash("");
+    try {
+      const v = { ...form, value:+form.value||0, min_qty:+form.min_qty||1,
+        free_qty:+form.free_qty||0, share_pct:+form.share_pct||0,
+        product_id:form.product_id||null, channel_id:form.channel_id||null };
+      if (edit && edit!=="baru") await updateDiscount(edit, v);
+      else await addDiscount(r.id, v);
+      setFlash("✓ Skema diskon tersimpan"); setEdit(null); setForm(kosong()); await onChange();
+    } catch(err){ setFlash("✗ "+err.message); }
+    setBusy(false);
+  };
+
+  const hapus = async (d) => {
+    if (!confirm(`Hapus skema "${d.name}"?`)) return;
+    try { await deleteDiscount(d.id); onChange(); } catch(err){ alert(err.message); }
+  };
+
+  // potongan platform yang berlaku untuk satu skema
+  const feeUntuk = (d) => {
+    if (d.channel_id) {
+      const c = n.kanal.find(x=>x.id===d.channel_id);
+      if (c) return (Number(c.fee_pct)||0)/100;
+    }
+    return n.feePctEfektif;
+  };
+  const produkUntuk = (d) => d.product_id
+    ? n.produk.filter(p=>p.id===d.product_id)
+    : n.produk;
+
+  const mt = (+marginTarget||0)/100;
+  const adaProduk = n.produk.length > 0;
+
+  // ringkasan dampak seluruh promo aktif terhadap omzet & laba bulanan
+  const dampak = n.diskon.filter(d=>d.active!==false).reduce((acc,d)=>{
+    const f = feeUntuk(d), share = (Number(d.share_pct)||0)/100;
+    if (share <= 0) return acc;
+    produkUntuk(d).forEach(p=>{
+      const qty = (Number(p.qty_month)||0) * share;
+      if (qty <= 0) return;
+      const h = hasilDiskon(p, d, f);
+      acc.omzetTurun += ((Number(p.price_unit)||0) - h.hargaBaru) * qty;
+      acc.labaTurun  += -h.selisihLaba * qty;
+      acc.adaIsi = true;
+    });
+    return acc;
+  }, { omzetTurun:0, labaTurun:0, adaIsi:false });
+
+  return (
+    <div style={{ marginTop:22, paddingTop:18, borderTop:`1px solid ${C.line}` }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start",
+        gap:10, flexWrap:"wrap", marginBottom:14 }}>
+        <div style={{ flex:1, minWidth:220 }}>
+          <div style={{ fontWeight:700, fontSize:14 }}>Skema Diskon</div>
+          <div style={{ fontSize:12.5, color:C.sub, lineHeight:1.55, marginTop:3 }}>
+            Diskon memotong harga jual, tapi harga produksi tidak ikut turun — dan potongan
+            marketplace dihitung dari harga <i>setelah</i> diskon. Bagian ini menghitung sampai
+            berapa persen diskon masih aman.
+          </div>
+        </div>
+        <button className="btn no-print" onClick={()=>{ setEdit(edit?null:"baru"); setForm(kosong()); }}
+          disabled={!adaProduk}
+          style={{ display:"flex", alignItems:"center", gap:6,
+            background:!adaProduk?C.line:(edit?C.surf:C.teal),
+            color:!adaProduk?"#fff":(edit?C.sub:"#fff"),
+            padding:"8px 14px", borderRadius:8, fontSize:12.5, fontWeight:600 }}>
+          {edit ? <><X size={14}/> Tutup</> : <><Plus size={14}/> Tambah Skema</>}</button>
+      </div>
+
+      {!adaProduk && (
+        <Kosong teks="Isi tahap 2 Produk dulu — batas diskon dihitung dari harga jual dan harga produksi tiap produk." />
+      )}
+
+      {adaProduk && <>
+        {/* ---- Batas aman diskon per produk ---- */}
+        <div className="scroll-x" style={{ border:`1px solid ${C.line}`, borderRadius:11,
+          overflow:"hidden", marginBottom:14 }}>
+          <div style={{ padding:"11px 14px", background:C.pos+"0D",
+            borderBottom:`1px solid ${C.line}`, display:"flex", alignItems:"center",
+            gap:10, flexWrap:"wrap" }}>
+            <div style={{ flex:1, minWidth:200 }}>
+              <div style={{ fontWeight:700, fontSize:12.5 }}>Batas Aman Diskon per Produk</div>
+              <div style={{ fontSize:11, color:C.sub, marginTop:2 }}>
+                Sudah memperhitungkan potongan platform {pct(n.feePctEfektif)}
+              </div>
+            </div>
+            <div className="no-print" style={{ display:"flex", alignItems:"center", gap:7 }}>
+              <span style={{ fontSize:11, color:C.sub }}>Margin minimum yang dijaga</span>
+              <select value={marginTarget} onChange={e=>setMarginTarget(+e.target.value)}
+                style={{ ...inp, width:"auto", padding:"5px 8px", fontSize:12, fontWeight:600 }}>
+                {[0,5,10,15,20,25,30].map(v=><option key={v} value={v}>{v}%</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"1.5fr 100px 100px 110px 95px 95px",
+            padding:"9px 14px", background:C.deep, color:"#DDECEC", fontSize:10, fontWeight:600 }}>
+            <span>PRODUK</span>
+            <span style={{ textAlign:"right" }}>HARGA JUAL</span>
+            <span style={{ textAlign:"right" }}>PRODUKSI</span>
+            <span style={{ textAlign:"right" }}>HARGA LANTAI</span>
+            <span style={{ textAlign:"center" }}>DISKON AMAN</span>
+            <span style={{ textAlign:"center" }}>IMPAS</span>
+          </div>
+          {n.produk.map(p=>{
+            const P = Number(p.price_unit)||0, Cc = Number(p.cost_unit)||0;
+            const b = batasDiskon(P, Cc, n.feePctEfektif, mt);
+            const lantai = (1-n.feePctEfektif) > 0 ? Cc/(1-n.feePctEfektif) : 0;
+            return (
+              <div key={p.id} style={{ display:"grid",
+                gridTemplateColumns:"1.5fr 100px 100px 110px 95px 95px",
+                padding:"10px 14px", borderBottom:`1px solid ${C.line}`, fontSize:12, alignItems:"center" }}>
+                <span><b style={{ color:C.deep }}>{p.name}</b>
+                  {p.variant && <span style={{ color:C.sub }}> · {p.variant}</span>}</span>
+                <span className="mono" style={{ textAlign:"right", fontWeight:600 }}>{money(P)}</span>
+                <span className="mono" style={{ textAlign:"right", color:C.sub }}>{money(Cc)}</span>
+                <span className="mono" style={{ textAlign:"right", color:C.brass, fontWeight:600 }}>
+                  {money(lantai)}</span>
+                <span className="mono" style={{ textAlign:"center", fontWeight:700,
+                  color: b.aman>0 ? C.pos : C.neg }}>
+                  {b.aman===null||b.aman<=0 ? "—" : pct(b.aman)}</span>
+                <span className="mono" style={{ textAlign:"center", fontWeight:600,
+                  color: b.impas>0 ? C.brass : C.neg }}>
+                  {b.impas===null||b.impas<=0 ? "—" : pct(b.impas)}</span>
+              </div>
+            );
+          })}
+          <div style={{ padding:"11px 14px", fontSize:11.5, color:C.sub, lineHeight:1.6 }}>
+            <b>Harga lantai</b> = harga terendah yang masih menutup produksi setelah dipotong platform —
+            jual di bawah ini pasti rugi. <b>Diskon aman</b> = batas yang masih menyisakan margin {marginTarget}%.
+            <b> Impas</b> = batas sebelum rugi, tanpa sisa margin sama sekali. Pakai kolom diskon aman
+            untuk promo rutin, dan kolom impas hanya untuk cuci gudang.
+          </div>
+        </div>
+
+        {/* ---- Form skema ---- */}
+        {edit && (
+          <div className="pop no-print" style={{ border:`2px solid ${edit==="baru"?C.teal:C.brass}`,
+            borderRadius:11, padding:16, marginBottom:14 }}>
+            <div className="row-stack" style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr", gap:10, marginBottom:10 }}>
+              <div><label style={lbl}>Nama Promo</label>
+                <input placeholder="mis. Promo Peluncuran, Beli 2 Gratis 1" value={form.name}
+                  onChange={e=>setForm({...form,name:e.target.value})} style={inp} /></div>
+              <div><label style={lbl}>Jenis</label>
+                <select value={form.kind} onChange={e=>setForm({...form,kind:e.target.value})} style={inp}>
+                  {Object.entries(JENIS_DISKON).map(([k,v])=>
+                    <option key={k} value={k}>{v.label}</option>)}</select>
+                <div style={{ fontSize:10.5, color:C.sub, marginTop:4 }}>
+                  {JENIS_DISKON[form.kind].ket}</div></div>
+            </div>
+
+            {form.kind==="bundling" ? (
+              <div className="row-stack" style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginBottom:10 }}>
+                <div><label style={lbl}>Beli berapa unit</label>
+                  <input className="mono" inputMode="numeric" placeholder="2" value={form.min_qty}
+                    onChange={e=>setForm({...form,min_qty:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
+                <div><label style={lbl}>Gratis berapa unit</label>
+                  <input className="mono" inputMode="numeric" placeholder="1" value={form.free_qty}
+                    onChange={e=>setForm({...form,free_qty:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
+                <div><label style={lbl}>Setara diskon</label>
+                  <div style={{ ...inp, display:"flex", alignItems:"center", fontWeight:700,
+                    color:C.brass, background:C.surf }}>
+                    {pct(potonganEfektif({ kind:"bundling", min_qty:+form.min_qty||1,
+                      free_qty:+form.free_qty||0 }, 1))}</div></div>
+              </div>
+            ) : (
+              <div className="row-stack" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
+                <div><label style={lbl}>Besaran ({JENIS_DISKON[form.kind].satuan})</label>
+                  <input className="mono" inputMode="numeric"
+                    placeholder={form.kind==="persen"?"15":"20000"} value={form.value}
+                    onChange={e=>setForm({...form,value:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
+                <div><label style={lbl}>Perkiraan porsi penjualan yang kena promo (%)</label>
+                  <input className="mono" inputMode="numeric" placeholder="0" value={form.share_pct}
+                    onChange={e=>setForm({...form,share_pct:e.target.value.replace(/\D/g,"")})} style={inp} /></div>
+              </div>
+            )}
+
+            {form.kind==="bundling" && (
+              <div style={{ marginBottom:10 }}>
+                <label style={lbl}>Perkiraan porsi penjualan yang kena promo (%)</label>
+                <input className="mono" inputMode="numeric" placeholder="0" value={form.share_pct}
+                  onChange={e=>setForm({...form,share_pct:e.target.value.replace(/\D/g,"")})}
+                  style={{ ...inp, maxWidth:220 }} /></div>
+            )}
+
+            <div className="row-stack" style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginBottom:10 }}>
+              <div><label style={lbl}>Berlaku untuk produk</label>
+                <select value={form.product_id} onChange={e=>setForm({...form,product_id:e.target.value})} style={inp}>
+                  <option value="">Semua produk</option>
+                  {n.produk.map(p=><option key={p.id} value={p.id}>{p.name}{p.variant?` · ${p.variant}`:""}</option>)}
+                </select></div>
+              <div><label style={lbl}>Berlaku di kanal</label>
+                <select value={form.channel_id} onChange={e=>setForm({...form,channel_id:e.target.value})} style={inp}>
+                  <option value="">Semua kanal (potongan rata-rata)</option>
+                  {n.kanal.map(c=><option key={c.id} value={c.id}>{c.name} · {Number(c.fee_pct)||0}%</option>)}
+                </select></div>
+              <div><label style={lbl}>Periode</label>
+                <input placeholder="mis. Jan–Feb 2026" value={form.period}
+                  onChange={e=>setForm({...form,period:e.target.value})} style={inp} /></div>
+            </div>
+
+            <label style={lbl}>Catatan / syarat</label>
+            <input placeholder="mis. hanya untuk siswa aktif, maksimal 2 per orang" value={form.note}
+              onChange={e=>setForm({...form,note:e.target.value})} style={{ ...inp, marginBottom:12 }} />
+
+            {/* pratinjau dampak per produk */}
+            {(()=>{
+              const dSim = { kind:form.kind, value:+form.value||0,
+                min_qty:+form.min_qty||1, free_qty:+form.free_qty||0 };
+              const f = form.channel_id
+                ? ((Number(n.kanal.find(c=>c.id===form.channel_id)?.fee_pct)||0)/100)
+                : n.feePctEfektif;
+              const sasaran = form.product_id ? n.produk.filter(p=>p.id===form.product_id) : n.produk;
+              const rugi = sasaran.filter(p=>hasilDiskon(p, dSim, f).laba < 0);
+              if (sasaran.length===0) return null;
+              return (
+                <div style={{ background: rugi.length?C.neg+"0D":C.surf, borderRadius:9,
+                  padding:"11px 13px", marginBottom:12,
+                  border: rugi.length?`1px solid ${C.neg}40`:"none" }}>
+                  <div style={{ fontSize:10.5, color:C.sub, fontWeight:600, letterSpacing:".05em",
+                    marginBottom:7 }}>DAMPAK KE TIAP PRODUK:</div>
+                  {sasaran.map(p=>{
+                    const h = hasilDiskon(p, dSim, f);
+                    return (
+                      <div key={p.id} style={{ display:"grid",
+                        gridTemplateColumns:"1.3fr 100px 100px 90px", gap:8, fontSize:12,
+                        padding:"4px 0", alignItems:"center" }}>
+                        <span style={{ color:C.ink }}>{p.name}</span>
+                        <span className="mono" style={{ textAlign:"right", color:C.sub }}>
+                          {money(h.hargaBaru)}</span>
+                        <span className="mono" style={{ textAlign:"right", fontWeight:600,
+                          color:h.laba>=0?C.pos:C.neg }}>{money(h.laba)}/unit</span>
+                        <span style={{ textAlign:"center", fontSize:10, fontWeight:700,
+                          color: h.laba<0 ? C.neg : (h.margin<mt ? C.brass : C.pos) }}>
+                          {h.laba<0 ? "RUGI" : (h.margin<mt ? "TIPIS" : "AMAN")}</span>
+                      </div>
+                    );
+                  })}
+                  {rugi.length>0 && (
+                    <div style={{ marginTop:8, fontSize:12, color:C.neg, lineHeight:1.55 }}>
+                      Diskon sebesar ini membuat {rugi.length} produk rugi per unitnya
+                      ({rugi.map(p=>p.name).join(", ")}). Turunkan besarannya, atau batasi promo
+                      hanya untuk produk yang marginnya lebar.
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            <button className="btn" onClick={simpan} disabled={busy||!form.name.trim()}
+              style={{ width:"100%", padding:"10px", borderRadius:9,
+                background:(form.name.trim()&&!busy)?(edit==="baru"?C.teal:C.brass):C.line,
+                color:"#fff", fontWeight:700, fontSize:13.5 }}>
+              {busy?"Menyimpan…":(edit==="baru"?"Simpan Skema":"Simpan Perubahan")}</button>
+          </div>
+        )}
+
+        {/* ---- Daftar skema ---- */}
+        {n.diskon.length===0 && !edit && (
+          <Kosong teks="Belum ada skema diskon. Tambahkan promo peluncuran, bundling, atau subsidi ongkir — supaya potongannya terhitung, bukan sekadar catatan." />
+        )}
+
+        {n.diskon.length>0 && (
+          <div style={{ display:"flex", flexDirection:"column", gap:9 }}>
+            {n.diskon.map(d=>{
+              const f = feeUntuk(d);
+              const sasaran = produkUntuk(d);
+              const hasil = sasaran.map(p=>({ p, h:hasilDiskon(p, d, f) }));
+              const rugi = hasil.filter(x=>x.h.laba < 0);
+              const tipis = hasil.filter(x=>x.h.laba >= 0 && x.h.margin < mt);
+              const status = rugi.length ? { l:"RUGI", t:C.neg }
+                : tipis.length ? { l:"TIPIS", t:C.brass } : { l:"AMAN", t:C.pos };
+              const jd = JENIS_DISKON[d.kind] || JENIS_DISKON.persen;
+              const nonaktif = d.active === false;
+              const kanalNama = d.channel_id
+                ? (n.kanal.find(c=>c.id===d.channel_id)?.name || "kanal terhapus")
+                : "semua kanal";
+              return (
+                <div key={d.id} style={{ border:`1px solid ${C.line}`,
+                  borderLeft:`3px solid ${nonaktif?C.line:status.t}`, borderRadius:10,
+                  padding:"12px 14px", opacity:nonaktif?0.55:1 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:6 }}>
+                    <span style={{ fontWeight:700, fontSize:13.5 }}>{d.name}</span>
+                    <span style={{ fontSize:9.5, fontWeight:700, padding:"2px 8px", borderRadius:20,
+                      background:status.t+"18", color:status.t }}>{status.l}</span>
+                    <span style={{ fontSize:11, color:C.sub }}>
+                      {jd.label}
+                      {d.kind==="bundling"
+                        ? ` ${Number(d.min_qty)||1}+${Number(d.free_qty)||0} · setara ${pct(potonganEfektif(d,1))}`
+                        : d.kind==="persen" ? ` ${Number(d.value)||0}%`
+                        : ` ${money(Number(d.value)||0)}`}
+                    </span>
+                    {Number(d.share_pct)>0 && <span style={{ fontSize:11, color:C.sub }}>
+                      · {Number(d.share_pct)}% penjualan</span>}
+                    <span className="no-print" style={{ marginLeft:"auto", display:"flex", gap:3 }}>
+                      <button className="btn" onClick={()=>isi(d)} title="Ubah"
+                        style={{ background:"transparent", color:C.sub, padding:2 }}><Pencil size={13} /></button>
+                      <button className="btn" onClick={()=>hapus(d)} title="Hapus"
+                        style={{ background:"transparent", color:C.sub, padding:2 }}><Trash2 size={13} /></button>
+                    </span>
+                  </div>
+                  <div style={{ fontSize:11.5, color:C.sub, marginBottom:hasil.length?8:0 }}>
+                    {d.product_id
+                      ? (n.produk.find(p=>p.id===d.product_id)?.name || "produk terhapus")
+                      : "semua produk"} · {kanalNama}
+                    {d.period && <> · {d.period}</>}
+                    {d.note && <> · {d.note}</>}
+                  </div>
+                  {hasil.length>0 && (
+                    <div className="scroll-x">
+                      <div style={{ display:"grid", gridTemplateColumns:"1.3fr 95px 95px 95px 70px",
+                        fontSize:10, color:C.sub, fontWeight:600, paddingBottom:4 }}>
+                        <span></span>
+                        <span style={{ textAlign:"right" }}>HARGA PROMO</span>
+                        <span style={{ textAlign:"right" }}>DITERIMA</span>
+                        <span style={{ textAlign:"right" }}>LABA/UNIT</span>
+                        <span style={{ textAlign:"center" }}>MARGIN</span>
+                      </div>
+                      {hasil.map(({ p, h })=>(
+                        <div key={p.id} style={{ display:"grid",
+                          gridTemplateColumns:"1.3fr 95px 95px 95px 70px", fontSize:12,
+                          padding:"3px 0", alignItems:"center" }}>
+                          <span style={{ color:C.ink }}>{p.name}</span>
+                          <span className="mono" style={{ textAlign:"right" }}>{money(h.hargaBaru)}</span>
+                          <span className="mono" style={{ textAlign:"right", color:C.sub }}>{money(h.bersih)}</span>
+                          <span className="mono" style={{ textAlign:"right", fontWeight:700,
+                            color:h.laba>=0?C.pos:C.neg }}>{money(h.laba)}</span>
+                          <span className="mono" style={{ textAlign:"center",
+                            color:h.margin===null?C.sub:(h.margin<0?C.neg:h.margin<mt?C.brass:C.pos) }}>
+                            {h.margin===null?"—":pct(h.margin)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* ---- Dampak ke proyeksi bulanan ---- */}
+        {dampak.adaIsi && (
+          <div style={{ marginTop:14, border:`1px solid ${C.brass}40`, borderRadius:11,
+            background:C.brass+"08", padding:"14px 16px" }}>
+            <div style={{ fontWeight:700, fontSize:13, marginBottom:10 }}>
+              Dampak Promo ke Proyeksi Bulanan</div>
+            <div className="grid-2" style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12 }}>
+              <Cell2 l="Omzet tanpa promo" v={money(n.omzetBln)} bold />
+              <Cell2 l="Omzet dengan promo" v={money(n.omzetBln - dampak.omzetTurun)} bold />
+              <Cell2 l="Laba tanpa promo" v={money(n.labaBln)} bold />
+              <Cell2 l="Laba dengan promo" v={money(n.labaBln - dampak.labaTurun)} bold />
+            </div>
+            <div style={{ fontSize:12, color:C.ink, marginTop:10, lineHeight:1.65 }}>
+              Promo yang berjalan memangkas omzet <b>{money(dampak.omzetTurun)}</b> dan laba
+              <b> {money(dampak.labaTurun)}</b> per bulan
+              {n.labaBln>0 && <> — sekitar <b>{pct(dampak.labaTurun/n.labaBln)}</b> dari laba proyeksi</>}.
+              {n.labaBln - dampak.labaTurun < 0
+                ? <span style={{ color:C.neg, fontWeight:600 }}> Dengan promo sebesar ini rencananya
+                    jadi rugi. Kurangi besaran diskon atau porsi penjualan yang kena promo.</span>
+                : <> Angka ini belum masuk ke tahap 5 dan 6 — anggap sebagai pengurang saat membaca
+                    kelayakan, atau sesuaikan harga jual di tahap 2 kalau promonya memang permanen.</>}
+            </div>
+          </div>
+        )}
+      </>}
+    </div>
   );
 }
 
@@ -4448,10 +4895,25 @@ function TabKelayakan({ r, n, rel, danaTersedia, tertaut, ubahStatus, onChange, 
         ket="Kesimpulan dari seluruh tahap — apakah layak dijalankan dan dananya mencukupi." />
 
       {!n.adaRincian && (
-        <div style={{ padding:"24px 18px", textAlign:"center", border:`1px dashed ${C.line}`,
-          borderRadius:11, color:C.sub, fontSize:13, lineHeight:1.6, marginBottom:16 }}>
-          Belum ada angka untuk dinilai. Isi tahap 2 sampai 5 dulu — kelayakannya terhitung sendiri
-          begitu anggaran terisi.
+        <div style={{ border:`1px dashed ${C.line}`, borderRadius:11, padding:"20px 18px",
+          marginBottom:16 }}>
+          <div style={{ fontSize:13, color:C.ink, lineHeight:1.65, marginBottom:14, textAlign:"center" }}>
+            Belum ada angka untuk dinilai. Begitu <b>tahap 2 Produk</b> terisi — cukup satu produk
+            dengan harga produksi, harga jual, dan target jual per bulan — seluruh bagian di bawah
+            ini terhitung sendiri:
+          </div>
+          <div className="grid-auto" style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:12 }}>
+            {[
+              { j:"Titik Impas", k:"Berapa persen dari target bulanan yang harus tercapai supaya tidak rugi — setara berapa unit terjual." },
+              { j:"Uji Skenario", k:"Perbandingan pesimis 60%, realistis 100%, dan optimis 130% berdampingan, lengkap dengan laba dan balik modalnya." },
+              { j:"Arus Kas 12 Bulan", k:"Grafik dan tabel saldo kas tiap bulan — menunjukkan kapan kasnya paling tipis." },
+            ].map(x=>(
+              <div key={x.j} style={{ border:`1px solid ${C.line}`, borderRadius:9, padding:"11px 13px" }}>
+                <div style={{ fontWeight:700, fontSize:12.5, marginBottom:4 }}>{x.j}</div>
+                <div style={{ fontSize:11.5, color:C.sub, lineHeight:1.55 }}>{x.k}</div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -4876,6 +5338,37 @@ function penilaianInisiatif(n, r, danaTersedia, rel) {
       out.push({ tone:C.sub, m:`${tanpaTindak} butir SWOT belum punya tindak lanjut. Tanpa itu, SWOT berhenti jadi daftar dan tidak membantu keputusan.` });
   } else if (!n.swot || n.swot.length === 0) {
     out.push({ tone:C.sub, m:"Analisis SWOT di tahap 1 belum diisi. Mengisi kekuatan, kelemahan, peluang, dan ancaman membantu menilai apakah angka di atas realistis." });
+  }
+  // dari skema diskon
+  if (n.diskon && n.diskon.length > 0 && n.produk.length > 0) {
+    const feeUntuk = (d) => {
+      if (d.channel_id) {
+        const c = n.kanal.find(x=>x.id===d.channel_id);
+        if (c) return (Number(c.fee_pct)||0)/100;
+      }
+      return n.feePctEfektif;
+    };
+    const bermasalah = [];
+    let labaTurun = 0;
+    n.diskon.filter(d=>d.active!==false).forEach(d=>{
+      const f = feeUntuk(d);
+      const sasaran = d.product_id ? n.produk.filter(p=>p.id===d.product_id) : n.produk;
+      const rugi = sasaran.filter(p=>hasilDiskon(p, d, f).laba < 0);
+      if (rugi.length) bermasalah.push(`${d.name} (${rugi.map(p=>p.name).join(", ")})`);
+      const share = (Number(d.share_pct)||0)/100;
+      if (share > 0) sasaran.forEach(p=>{
+        labaTurun += -hasilDiskon(p, d, f).selisihLaba * (Number(p.qty_month)||0) * share;
+      });
+    });
+    if (bermasalah.length)
+      out.push({ tone:C.neg, m:`Ada skema diskon yang membuat produk rugi per unit: ${bermasalah.join("; ")}. Perbaiki besarannya di tahap 3, atau batasi hanya untuk produk bermargin lebar.` });
+    if (labaTurun > 0 && n.labaBln > 0) {
+      const porsi = labaTurun/n.labaBln;
+      if (porsi >= 1)
+        out.push({ tone:C.neg, m:`Promo yang direncanakan memangkas laba ${money(labaTurun)}/bulan — melebihi laba proyeksi itu sendiri (${money(n.labaBln)}). Dengan skema ini rencananya rugi.` });
+      else if (porsi >= 0.3)
+        out.push({ tone:C.brass, m:`Promo yang direncanakan memangkas ${pct(porsi)} dari laba bulanan (${money(labaTurun)}). Masih untung, tapi pastikan promo ini benar-benar menambah volume — bukan cuma memberi diskon ke pembeli yang toh akan beli.` });
+    }
   }
   if (r.status === "ide")
     out.push({ tone:C.sub, m:"Status masih Ide. Pindahkan ke Kajian setelah anggarannya dihitung serius." });
