@@ -128,6 +128,8 @@ export default function App() {
       else if (tab === "balance") {
         setSheet(await rpcBalanceSheet(orgId, asOf));
         setRetained(await rpcRetainedProfit(orgId, asOf));
+        // saldo seluruh akun — dipakai pemeriksa selisih bila neraca timpang
+        setBalances(await rpcAccountBalances(orgId, start, end));
       } else if (tab === "cashflow") {
         setFlow(await rpcCashFlow(orgId, start, end));
         setFlowDetail(await rpcCashFlowDetail(orgId, start, end));
@@ -272,7 +274,8 @@ export default function App() {
           {tab==="ledger"    && <Ledger balances={balances} />}
           {tab==="trial"     && <Trial balances={balances} />}
           {tab==="pnl"       && <PnL pnl={pnl} pnlPrev={pnlPrev} period={period} accounts={accounts} />}
-          {tab==="balance"   && <Balance sheet={sheet} retained={retained} period={period} />}
+          {tab==="balance"   && <Balance sheet={sheet} retained={retained} period={period}
+                                        accounts={accounts} balances={balances} />}
           {tab==="equity"    && <Equity key={yearTick} orgId={orgId} period={period} />}
           {tab==="cashflow"  && <CashFlow flow={flow} detail={flowDetail} accounts={accounts} />}
           {tab==="coa"       && <COAView accounts={accounts} orgId={orgId} onChange={reloadAccounts} />}
@@ -1611,7 +1614,55 @@ const Empty=()=><div style={{ padding:"9px 20px", fontSize:12, color:C.sub, font
 // ============================================================
 // BALANCE SHEET
 // ============================================================
-function Balance({ sheet, retained, period }) {
+/* ============================================================
+   PEMERIKSA SELISIH NERACA
+   Neraca timpang hampir selalu berasal dari akun yang kolom
+   `statement`-nya tidak cocok dengan `type`-nya: akun beban yang
+   ditandai NRC ikut tampil di neraca tapi dilewati saat menghitung
+   laba, atau sebaliknya. Fungsi ini mencari akun seperti itu dan
+   mencocokkan saldonya dengan besar selisih.
+   ============================================================ */
+const TIPE_NERACA = ["Kas & Bank","Akun Piutang","Aktiva Tetap","Kewajiban","Ekuitas"];
+const TIPE_LABARUGI = ["Pendapatan","Other Income","COGS","Beban Op","Beban Kas","Other Expense"];
+
+function periksaNeraca(accounts, balances, selisih) {
+  const saldo = {};
+  (balances||[]).forEach(b=>{ saldo[b.code] = Number(b.balance)||0; });
+
+  const salahStatement = [], tipeAsing = [];
+  (accounts||[]).forEach(a=>{
+    const s = saldo[a.code] || 0;
+    const seharusnya = TIPE_NERACA.includes(a.type) ? "NRC"
+                     : TIPE_LABARUGI.includes(a.type) ? "LR" : null;
+    if (seharusnya === null) {
+      if (s !== 0) tipeAsing.push({ ...a, saldo:s });
+    } else if (a.statement !== seharusnya) {
+      salahStatement.push({ ...a, saldo:s, seharusnya });
+    }
+  });
+
+  // rekonsiliasi per kelompok, dari saldo seluruh akun
+  const jml = (tipe, balik) => (balances||[])
+    .filter(b=>tipe.includes(b.type))
+    .reduce((t,b)=>t + (balik ? -Number(b.balance||0) : Number(b.balance||0)), 0);
+  const aktiva     = jml(["Kas & Bank","Akun Piutang","Aktiva Tetap"]);
+  const kewajiban  = jml(["Kewajiban"]);
+  const ekuitas    = jml(["Ekuitas"]);
+  const pendapatan = jml(["Pendapatan","Other Income"]);
+  const beban      = jml(["COGS","Beban Op","Beban Kas","Other Expense"]);
+  const selisihJurnal = aktiva - (kewajiban + ekuitas + pendapatan - beban);
+
+  const tersangka = [...salahStatement, ...tipeAsing];
+  const totalTersangka = tersangka.reduce((t,x)=>t+Math.abs(x.saldo), 0);
+  const cocok = tersangka.length > 0 &&
+    Math.abs(totalTersangka - Math.abs(selisih)) < 1;
+
+  return { salahStatement, tipeAsing, tersangka, totalTersangka, cocok,
+           aktiva, kewajiban, ekuitas, pendapatan, beban, selisihJurnal,
+           adaData: (balances||[]).length > 0 };
+}
+
+function Balance({ sheet, retained, period, accounts, balances }) {
   const aset = sheet.filter(a=>["Kas & Bank","Akun Piutang","Aktiva Tetap"].includes(a.type));
   const hutang = sheet.filter(a=>a.type==="Kewajiban");
   const modal = sheet.filter(a=>a.type==="Ekuitas");
@@ -1667,8 +1718,186 @@ function Balance({ sheet, retained, period }) {
       <div className="card" style={{ marginTop:14, padding:"14px 20px", textAlign:"center",
         background:bal?C.pos+"10":C.neg+"10", border:`1px solid ${bal?C.pos+"40":C.neg+"40"}`,
         color:bal?C.pos:C.neg, fontWeight:700, fontSize:14 }}>
-        {bal?"✓ SEIMBANG — Total Aktiva = Kewajiban + Modal":`✗ SELISIH ${money(Math.abs(totalAset-totalPasiva))} — cek jurnal`}
+        {bal?"✓ SEIMBANG — Total Aktiva = Kewajiban + Modal":`✗ SELISIH ${money(Math.abs(totalAset-totalPasiva))}`}
       </div>
+
+      {/* ---- Pemeriksa selisih ---- */}
+      {!bal && (()=>{
+        const selisih = totalAset - totalPasiva;
+        const d = periksaNeraca(accounts, balances, selisih);
+        if (!d.adaData) return (
+          <div className="card" style={{ marginTop:12, padding:"14px 18px", fontSize:12.5,
+            color:C.sub, lineHeight:1.6 }}>
+            Memuat data akun untuk menelusuri selisih… tekan <b>Refresh</b> bila tidak muncul.
+          </div>
+        );
+        return (
+          <div className="card" style={{ marginTop:12, overflow:"hidden" }}>
+            <div style={{ padding:"13px 18px", borderBottom:`1px solid ${C.line}` }}>
+              <div style={{ fontWeight:700, fontSize:14 }}>Penelusuran Selisih</div>
+              <div style={{ fontSize:12, color:C.sub, marginTop:3, lineHeight:1.55 }}>
+                {selisih < 0
+                  ? "Pasiva lebih besar dari Aktiva — biasanya karena ada beban yang tidak ikut terhitung saat menghitung laba, sehingga labanya kelebihan."
+                  : "Aktiva lebih besar dari Pasiva — biasanya karena ada pendapatan atau kewajiban yang tidak terbaca di laporan."}
+              </div>
+            </div>
+
+            {/* rekonsiliasi kelompok */}
+            <div className="scroll-x" style={{ borderBottom:`1px solid ${C.line}` }}>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 170px",
+                padding:"9px 18px", background:C.surf, fontSize:11, fontWeight:600, color:C.sub }}>
+                <span>REKONSILIASI DARI SELURUH AKUN</span>
+                <span style={{ textAlign:"right" }}>SALDO</span>
+              </div>
+              {[
+                { l:"Aktiva", v:d.aktiva },
+                { l:"Kewajiban", v:d.kewajiban },
+                { l:"Ekuitas (modal disetor)", v:d.ekuitas },
+                { l:"Pendapatan", v:d.pendapatan },
+                { l:"Beban", v:-d.beban },
+              ].map(x=>(
+                <div key={x.l} style={{ display:"grid", gridTemplateColumns:"1fr 170px",
+                  padding:"7px 18px", fontSize:12.5, borderBottom:`1px solid ${C.line}` }}>
+                  <span style={{ color:C.sub }}>{x.l}</span>
+                  <span className="mono" style={{ textAlign:"right" }}>{money(x.v)}</span>
+                </div>
+              ))}
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 170px",
+                padding:"10px 18px", fontSize:12.5, fontWeight:700,
+                background: Math.abs(d.selisihJurnal)<1 ? C.pos+"0D" : C.neg+"0D" }}>
+                <span>Aktiva − (Kewajiban + Ekuitas + Pendapatan − Beban)</span>
+                <span className="mono" style={{ textAlign:"right",
+                  color: Math.abs(d.selisihJurnal)<1 ? C.pos : C.neg }}>{money(d.selisihJurnal)}</span>
+              </div>
+            </div>
+
+            <div style={{ padding:"12px 18px", fontSize:12.5, color:C.ink, lineHeight:1.65,
+              borderBottom:`1px solid ${C.line}` }}>
+              {Math.abs(d.selisihJurnal) < 1
+                ? <><b style={{ color:C.pos }}>Jurnalnya sendiri seimbang.</b> Jadi angkanya benar —
+                    yang keliru adalah penggolongan akun, sehingga sebagian saldo tidak terbaca
+                    laporan. Lihat daftar di bawah.</>
+                : <><b style={{ color:C.neg }}>Penjumlahan seluruh akun juga tidak nol
+                    ({money(Math.abs(d.selisihJurnal))}).</b> Ini mengarah ke entri jurnal yang debet
+                    dan kreditnya tidak sama. Jalankan query di bagian bawah untuk memastikan yang mana.</>}
+            </div>
+
+            {/* akun bermasalah */}
+            {d.tersangka.length > 0 ? (
+              <>
+                <div style={{ padding:"11px 18px", background:C.brass+"12",
+                  fontWeight:700, fontSize:12.5, color:C.deep }}>
+                  AKUN YANG PENGGOLONGANNYA KELIRU ({d.tersangka.length})
+                </div>
+                <div className="scroll-x">
+                  <div style={{ display:"grid", gridTemplateColumns:"105px 1.4fr 120px 150px 130px",
+                    padding:"9px 18px", background:C.deep, color:"#DDECEC", fontSize:10, fontWeight:600 }}>
+                    <span>KODE</span><span>NAMA AKUN</span><span>TIPE</span>
+                    <span style={{ textAlign:"center" }}>MASALAH</span>
+                    <span style={{ textAlign:"right" }}>SALDO</span>
+                  </div>
+                  {d.salahStatement.map(a=>(
+                    <div key={a.id} style={{ display:"grid",
+                      gridTemplateColumns:"105px 1.4fr 120px 150px 130px",
+                      padding:"9px 18px", borderBottom:`1px solid ${C.line}`, fontSize:12, alignItems:"center" }}>
+                      <span className="mono" style={{ fontWeight:600, color:C.deep }}>{a.code}</span>
+                      <span>{a.name}</span>
+                      <span style={{ color:C.sub, fontSize:11 }}>{a.type}</span>
+                      <span style={{ textAlign:"center", fontSize:11, color:C.neg, fontWeight:600 }}>
+                        statement {a.statement} → {a.seharusnya}</span>
+                      <span className="mono" style={{ textAlign:"right", fontWeight:700,
+                        color:a.saldo?C.neg:C.sub }}>{money(a.saldo)}</span>
+                    </div>
+                  ))}
+                  {d.tipeAsing.map(a=>(
+                    <div key={a.id} style={{ display:"grid",
+                      gridTemplateColumns:"105px 1.4fr 120px 150px 130px",
+                      padding:"9px 18px", borderBottom:`1px solid ${C.line}`, fontSize:12, alignItems:"center" }}>
+                      <span className="mono" style={{ fontWeight:600, color:C.deep }}>{a.code}</span>
+                      <span>{a.name}</span>
+                      <span style={{ color:C.neg, fontSize:11 }}>{a.type}</span>
+                      <span style={{ textAlign:"center", fontSize:11, color:C.neg, fontWeight:600 }}>
+                        tipe tidak dikenali</span>
+                      <span className="mono" style={{ textAlign:"right", fontWeight:700, color:C.neg }}>
+                        {money(a.saldo)}</span>
+                    </div>
+                  ))}
+                  <div style={{ display:"grid", gridTemplateColumns:"105px 1.4fr 120px 150px 130px",
+                    padding:"10px 18px", background:C.surf, fontSize:12.5, fontWeight:700 }}>
+                    <span></span><span>TOTAL SALDO AKUN BERMASALAH</span><span></span><span></span>
+                    <span className="mono" style={{ textAlign:"right" }}>{money(d.totalTersangka)}</span>
+                  </div>
+                </div>
+
+                <div style={{ padding:"13px 18px", fontSize:12.5, color:C.ink, lineHeight:1.7 }}>
+                  {d.cocok ? (
+                    <><b style={{ color:C.pos }}>Ketemu.</b> Total saldo akun bermasalah
+                      ({money(d.totalTersangka)}) sama persis dengan selisih neraca
+                      ({money(Math.abs(selisih))}) — jadi inilah penyebabnya.
+                      <div style={{ marginTop:9 }}>
+                        <b>Cara memperbaiki:</b> buka menu <b>Chart of Account</b>, cari akun di atas,
+                        klik ikon pensil, lalu tetapkan tipenya dengan benar. Kalau akun itu memang
+                        beban, pilih tipe <b>Beban Kas</b> atau <b>Beban Op</b> — kolom "Masuk Laporan"
+                        akan ikut berubah jadi Laba Rugi dengan sendirinya. Kalau sebenarnya aset,
+                        pilih <b>Aktiva Tetap</b>.
+                      </div>
+                      <div style={{ marginTop:7, fontSize:11.5, color:C.sub }}>
+                        Catatan: untuk akun yang sudah dipakai di jurnal, tipe terkunci demi keamanan
+                        laporan. Perbaikannya lewat SQL di bawah.
+                      </div></>
+                  ) : (
+                    <><b style={{ color:C.brass }}>Belum pas.</b> Total saldo akun bermasalah
+                      ({money(d.totalTersangka)}) berbeda dari selisih neraca ({money(Math.abs(selisih))}).
+                      Perbaiki dulu akun di atas, lalu buka ulang halaman ini — kalau masih bersisa,
+                      berarti ada juga jurnal yang debet-kreditnya timpang.</>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div style={{ padding:"14px 18px", fontSize:12.5, color:C.ink, lineHeight:1.7 }}>
+                <b>Tidak ada akun yang salah golong.</b> Berarti selisihnya datang dari entri jurnal
+                yang debet dan kreditnya tidak sama, atau dari akun yang saldonya tidak terbaca
+                fungsi laporan. Jalankan query di bawah di Supabase untuk menemukannya.
+              </div>
+            )}
+
+            {/* query cadangan */}
+            <details className="no-print" style={{ borderTop:`1px solid ${C.line}` }}>
+              <summary style={{ padding:"11px 18px", cursor:"pointer", fontSize:12.5,
+                fontWeight:600, color:C.deep }}>
+                Query SQL untuk menelusuri lebih dalam
+              </summary>
+              <div style={{ padding:"0 18px 14px" }}>
+                <div style={{ fontSize:11.5, color:C.sub, marginBottom:6, lineHeight:1.5 }}>
+                  Jalankan di Supabase → SQL Editor. Query ini mencari entri jurnal yang debet ≠ kredit:
+                </div>
+                <pre className="mono" style={{ background:C.deep, color:"#DDECEC", padding:"12px 14px",
+                  borderRadius:9, fontSize:11, lineHeight:1.6, overflowX:"auto", margin:0 }}>
+{`select e.id, e.entry_date, e.memo,
+       sum(l.debit)  as total_debet,
+       sum(l.credit) as total_kredit,
+       sum(l.debit) - sum(l.credit) as selisih
+from journal_entries e
+join journal_lines l on l.entry_id = e.id
+group by e.id, e.entry_date, e.memo
+having abs(sum(l.debit) - sum(l.credit)) > 0.005
+order by e.entry_date;`}
+                </pre>
+                <div style={{ fontSize:11.5, color:C.sub, margin:"10px 0 6px", lineHeight:1.5 }}>
+                  Dan ini untuk memperbaiki penggolongan akun yang terkunci:
+                </div>
+                <pre className="mono" style={{ background:C.deep, color:"#DDECEC", padding:"12px 14px",
+                  borderRadius:9, fontSize:11, lineHeight:1.6, overflowX:"auto", margin:0 }}>
+{`update accounts
+set type = 'Beban Kas', statement = 'LR', normal_side = 'Db'
+where code = 'GANTI-KODE-AKUN';`}
+                </pre>
+              </div>
+            </details>
+          </div>
+        );
+      })()}
+
       <div style={{ fontSize:11.5, color:C.sub, marginTop:12, lineHeight:1.6 }}>
         Neraca menyajikan posisi keuangan <b>satu entitas utuh</b>, mencakup seluruh cabang. Aset
         seperti rekening bank, kas, dan peralatan dimiliki bersama sehingga tidak dipecah per cabang.
