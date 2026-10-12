@@ -167,9 +167,8 @@ export default function App() {
             <Menu size={22} />
           </button>
           <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-            <div style={{ width:26, height:26, borderRadius:7,
-              background:`linear-gradient(135deg,${C.teal},${C.brass})`, display:"grid",
-              placeItems:"center", fontWeight:800, color:"#fff", fontSize:13 }}>S</div>
+            <img src="/icon-192.png" alt="" width={26} height={26}
+              style={{ borderRadius:7, display:"block" }} />
             <span style={{ fontWeight:700, fontSize:14.5, color:"#fff" }}>Samudra Finance</span>
           </div>
           <span style={{ marginLeft:"auto", fontSize:12.5, fontWeight:700, color:C.brass }}>{yearTick}</span>
@@ -183,9 +182,8 @@ export default function App() {
           style={{ width:236, background:C.deep, color:"#DDECEC", padding:"22px 14px",
           position:"sticky", top:0, height:"100vh", flexShrink:0, display:"flex", flexDirection:"column" }}>
           <div style={{ display:"flex", alignItems:"center", gap:10, padding:"4px 8px 16px" }}>
-            <div style={{ width:34, height:34, borderRadius:9,
-              background:`linear-gradient(135deg,${C.teal},${C.brass})`, display:"grid",
-              placeItems:"center", fontWeight:800, color:"#fff" }}>S</div>
+            <img src="/icon-192.png" alt="" width={34} height={34}
+              style={{ borderRadius:9, display:"block" }} />
             <div><div style={{ fontWeight:700, fontSize:15, lineHeight:1 }}>Samudra</div>
               <div style={{ fontSize:11, color:C.brass, letterSpacing:".08em", marginTop:3 }}>FINANCE</div></div>
             <button className="btn nav-close no-print" onClick={()=>setNavOpen(false)} aria-label="Tutup menu"
