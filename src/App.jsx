@@ -1433,7 +1433,6 @@ function PnL({ pnl, pnlPrev, period, accounts }) {
   const grossProfit=rev-cogs, afterOp=grossProfit-opBank-kasBeban, profitFull=afterOp+oi-oe;
   const profitBank=rev-opBank+oi-oe;
   const shown=bankOnly?profitBank:profitFull;
-  const pettyTotal=cogs+kasBeban;
   const labelPeriode = period==="all" ? `Tahun ${YEAR}` : `${MONTHS[period]} ${YEAR}`;
 
   const Row=({r,ind})=>(
@@ -1466,7 +1465,7 @@ function PnL({ pnl, pnlPrev, period, accounts }) {
       <div style={{ padding:"11px 15px", borderRadius:10, marginBottom:16, fontSize:12.5, lineHeight:1.5,
         background:bankOnly?C.kas+"10":C.teal+"0D", border:`1px solid ${bankOnly?C.kas+"30":C.teal+"25"}`, color:C.deep }}>
         {bankOnly
-          ? <>Laba versi <b>arus kas Bank</b> — beban petty cash tidak dihitung, hanya jadi catatan di bawah.</>
+          ? <>Laba versi <b>arus kas Bank</b> — hanya beban yang keluar dari rekening BCA. Beban petty cash tidak dihitung di sini; lihat versi <b>Lengkap</b> untuk laba sesungguhnya.</>
           : <>Laba <b>sesungguhnya</b> — semua beban dihitung. Pakai angka ini untuk keputusan, wakaf, dividen.</>}
       </div>
 
@@ -1525,31 +1524,13 @@ function PnL({ pnl, pnlPrev, period, accounts }) {
         </>:null}
       </div>
 
-      {bankOnly && pettyTotal>0 && (
-        <div className="card" style={{ marginTop:14, overflow:"hidden", borderColor:C.kas+"40" }}>
-          <div style={{ padding:"11px 20px", background:C.kas+"12", fontWeight:700, color:C.kas, fontSize:12.5 }}>
-            CATATAN — BEBAN DITANGGUNG PETTY CASH (tidak masuk laba versi ini)</div>
-          {[...g("COGS"),...g("Beban Kas")].map(r=>(
-            <div key={r.code} style={{ display:"grid", gridTemplateColumns:"120px 1fr 170px",
-              padding:"8px 20px", borderTop:`1px solid ${C.line}`, fontSize:12.5 }}>
-              <span className="mono" style={{ color:C.kas, fontWeight:600 }}>{r.code}</span>
-              <span style={{ color:C.sub }}>{r.name}</span>
-              <span className="mono" style={{ textAlign:"right" }}>{money(Number(r.amount))}</span></div>
-          ))}
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 170px", padding:"10px 20px",
-            background:C.kas+"0D", fontWeight:700, fontSize:12.5 }}>
-            <span>Total Beban Petty Cash</span>
-            <span className="mono" style={{ textAlign:"right", color:C.kas }}>{money(pettyTotal)}</span></div>
-        </div>
-      )}
-
       <div className="card" style={{ padding:"18px 20px", marginTop:16, display:"flex",
         justifyContent:"space-between", alignItems:"center",
         background:shown>=0?C.pos+"10":C.neg+"10", border:`1px solid ${shown>=0?C.pos+"40":C.neg+"40"}` }}>
         <div><div style={{ fontSize:12.5, color:C.sub, fontWeight:600 }}>
           {bankOnly?"LABA VERSI BANK (arus kas rekening)":"PROFIT (LOSS) — LABA BERSIH"}</div>
           <div style={{ fontSize:11.5, color:C.sub, marginTop:2 }}>
-            Margin {rev?pct(shown/rev):"–"}{bankOnly?" · petty cash "+money(pettyTotal)+" belum dipotong":" · sebelum Wakaf & Deviden"}</div></div>
+            Margin {rev?pct(shown/rev):"–"}{bankOnly?" · hanya beban dari rekening Bank":" · sebelum Wakaf & Deviden"}</div></div>
         <div className="mono" style={{ fontSize:28, fontWeight:800, color:shown>=0?C.pos:C.neg }}>{money(shown)}</div>
       </div>
 
